@@ -1,0 +1,73 @@
+package com.bookshelf.domain.usecase.book
+
+import com.bookshelf.domain.model.AppResult
+import com.bookshelf.domain.model.Book
+import com.bookshelf.domain.repository.BookRepository
+import kotlinx.coroutines.flow.Flow
+import java.time.Instant
+import java.util.UUID
+import javax.inject.Inject
+
+class ObserveBooksUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    operator fun invoke(ownerId: String): Flow<List<Book>> =
+        bookRepository.observeBooks(ownerId)
+}
+
+class GetBookUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String): Book? =
+        bookRepository.getBook(bookId)
+}
+
+class CreateBookUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(
+        ownerId: String,
+        title: String,
+        description: String = "",
+    ): AppResult<Book> {
+        if (title.isBlank()) return AppResult.Error("Book title cannot be empty")
+        val book = Book(
+            id = UUID.randomUUID().toString(),
+            ownerId = ownerId,
+            title = title.trim(),
+            description = description.trim(),
+            createdAt = Instant.now(),
+            updatedAt = Instant.now(),
+        )
+        return bookRepository.createBook(book)
+    }
+}
+
+class RenameBookUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(
+        bookId: String,
+        newTitle: String,
+        newDescription: String,
+    ): AppResult<Book> {
+        if (newTitle.isBlank()) return AppResult.Error("Book title cannot be empty")
+        val existing = bookRepository.getBook(bookId)
+            ?: return AppResult.Error("Book not found")
+        return bookRepository.updateBook(
+            existing.copy(
+                title = newTitle.trim(),
+                description = newDescription.trim(),
+                updatedAt = Instant.now(),
+                isSynced = false,
+            )
+        )
+    }
+}
+
+class DeleteBookUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String): AppResult<Unit> =
+        bookRepository.deleteBook(bookId)
+}

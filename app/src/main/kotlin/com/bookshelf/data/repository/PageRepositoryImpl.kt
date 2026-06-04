@@ -1,0 +1,182 @@
+package com.bookshelf.data.repository
+
+import android.content.Context
+import android.net.Uri
+import com.bookshelf.data.local.db.BookDao
+import com.bookshelf.data.local.db.PageDao
+import com.bookshelf.data.local.model.toEntity
+import com.bookshelf.data.local.model.toDomain
+import com.bookshelf.domain.model.AppResult
+import com.bookshelf.domain.model.Page
+import com.bookshelf.domain.repository.PageRepository
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
+import com.google.firebase.storage.FirebaseStorage
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.tasks.await
+import java.io.File
+import java.time.Instant
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class PageRepositoryImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val pageDao: PageDao,
+    private val bookDao: BookDao,
+    private val firestore: FirebaseFirestore,
+    private val storage: FirebaseStorage,
+) : PageRepository {
+
+    override fun observePages(bookId: String): Flow<List<Page>> =
+        pageDao.observePages(bookId).map { list -> list.map { it.toDomain() } }
+
+    override suspend fun getPage(pageId: String): Page? =
+        pageDao.getPage(pageId)?.toDomain()
+
+    // ── Add page ──────────────────────────────────────────────────────────────
+
+    override suspend fun addPage(page: Page, sourceUri: String): AppResult<Page> = runCatching {
+        // 1. Copy the incoming URI into app-internal storage so it survives
+        //    content:// URI expiry and the original app being uninstalled.
+        val localFile = copyToInternalStorage(sourceUri, page.id, page.pageType.name.lowercase())
+        val localUri  = localFile.absolutePath
+
+        // 2. Determine insert position (append if -1)
+        val position = if (page.position < 0) {
+            pageDao.countPages(page.bookId)
+        } else {
+            page.position
+        }
+
+        val savedPage = page.copy(localUri = localUri, position = position)
+        pageDao.insertPage(savedPage.toEntity())
+
+        // 3. Update book's pageCount + updatedAt
+        val newCount = pageDao.countPages(page.bookId)
+        bookDao.updatePageCount(
+            bookId    = page.bookId,
+            count     = newCount,
+            updatedAt = Instant.now().toEpochMilli(),
+        )
+
+        savedPage
+    }.toAppResult()
+
+    // ── Reorder ───────────────────────────────────────────────────────────────
+
+    override suspend fun reorderPages(
+        bookId: String,
+        orderedIds: List<String>,
+    ): AppResult<Unit> = runCatching {
+        orderedIds.forEachIndexed { index, pageId ->
+            pageDao.updatePosition(pageId, index)
+        }
+    }.toAppResult()
+
+    // ── Delete ────────────────────────────────────────────────────────────────
+
+    override suspend fun deletePage(pageId: String): AppResult<Unit> = runCatching {
+        val entity = pageDao.getPage(pageId) ?: return@runCatching
+        pageDao.deletePage(pageId)
+
+        // Delete local file
+        entity.localUri?.let { File(it).delete() }
+
+        // Best-effort remote delete
+        entity.remoteUrl?.let {
+            runCatching { storage.getReferenceFromUrl(it).delete().await() }
+        }
+
+        // Update book pageCount
+        val newCount = pageDao.countPages(entity.bookId)
+        bookDao.updatePageCount(
+            bookId    = entity.bookId,
+            count     = newCount,
+            updatedAt = Instant.now().toEpochMilli(),
+        )
+    }.toAppResult()
+
+    // ── Sync: upload pending pages to Firebase Storage ────────────────────────
+
+    override suspend fun uploadPendingPages(ownerId: String): AppResult<Int> = runCatching {
+        val unsynced = pageDao.getUnsyncedPages(ownerId)
+        var count = 0
+        for (entity in unsynced) {
+            try {
+                val localFile = entity.localUri?.let { File(it) }
+                if (localFile == null || !localFile.exists()) {
+                    pageDao.markSyncError(entity.id, "Local file missing")
+                    continue
+                }
+
+                // Upload to: users/{ownerId}/books/{bookId}/pages/{pageId}.ext
+                val extension = localFile.extension
+                val remotePath = "users/${entity.ownerId}/books/${entity.bookId}/pages/${entity.id}.$extension"
+                val ref = storage.reference.child(remotePath)
+                ref.putFile(Uri.fromFile(localFile)).await()
+                val downloadUrl = ref.downloadUrl.await().toString()
+
+                // Update Firestore page document
+                pagesCollection(entity.ownerId, entity.bookId)
+                    .document(entity.id)
+                    .set(entity.toFirestoreMap(downloadUrl), SetOptions.merge())
+                    .await()
+
+                pageDao.markSynced(entity.id, downloadUrl)
+                count++
+            } catch (e: Exception) {
+                pageDao.markSyncError(entity.id, e.message ?: "Upload failed")
+            }
+        }
+        count
+    }.toAppResult()
+
+    // ── Sync: pull from Firestore (restore) ───────────────────────────────────
+
+    override suspend fun syncFromRemote(bookId: String): AppResult<Int> = runCatching {
+        // Pages under a book are stored at: users/{uid}/books/{bookId}/pages
+        // We'd need the ownerId here — in practice the SyncWorker passes it separately.
+        // For now, no-op placeholder — full implementation wired in SyncWorker.
+        0
+    }.toAppResult()
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    private fun copyToInternalStorage(sourceUri: String, pageId: String, ext: String): File {
+        val dir = File(context.filesDir, "pages").also { it.mkdirs() }
+        val dest = File(dir, "$pageId.$ext")
+        context.contentResolver.openInputStream(Uri.parse(sourceUri))
+            ?.use { input -> dest.outputStream().use { input.copyTo(it) } }
+            ?: error("Cannot open input stream for $sourceUri")
+        return dest
+    }
+
+    private fun pagesCollection(ownerId: String, bookId: String) =
+        firestore.collection("users")
+            .document(ownerId)
+            .collection("books")
+            .document(bookId)
+            .collection("pages")
+
+    private fun com.bookshelf.data.local.model.PageEntity.toFirestoreMap(
+        downloadUrl: String,
+    ): Map<String, Any?> = mapOf(
+        "id"               to id,
+        "bookId"           to bookId,
+        "ownerId"          to ownerId,
+        "position"         to position,
+        "pageType"         to pageType,
+        "remoteUrl"        to downloadUrl,
+        "originalFileName" to originalFileName,
+        "createdAt"        to createdAt,
+    )
+}
+
+private fun <T> Result<T>.toAppResult(): AppResult<T> =
+    fold(
+        onSuccess = { AppResult.Success(it) },
+        onFailure = { AppResult.Error(it.message ?: "Unknown error", it) },
+    )
