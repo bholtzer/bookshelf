@@ -1,27 +1,27 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
     alias(libs.plugins.google.services)
 }
 
 android {
-    namespace = "com.bookshelf"
-    compileSdk = 35
+    namespace = "com.bihstudio.bookshelf"
+    compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.bookshelf"
+        applicationId = "com.bihstudio.bookshelf"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -38,57 +38,67 @@ android {
     buildFeatures {
         compose = true
     }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.13"
+    }
+
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
 }
 
 dependencies {
-    // ── Compose ──────────────────────────────────────────────────────────────
+    // Compose BOM
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
-    implementation(libs.compose.foundation)                 // HorizontalPager
+    implementation(libs.compose.foundation)
     implementation(libs.activity.compose)
     debugImplementation(libs.compose.ui.tooling)
 
-    // ── Navigation ───────────────────────────────────────────────────────────
+    // Navigation
     implementation(libs.navigation.compose)
     implementation(libs.hilt.navigation.compose)
+    implementation(libs.lifecycle.runtime.compose)
 
-    // ── Hilt DI ──────────────────────────────────────────────────────────────
+    // Hilt
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
-    // ── Room ─────────────────────────────────────────────────────────────────
+    // Room
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
-    // ── Firebase ─────────────────────────────────────────────────────────────
+    // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth.ktx)
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.firebase.storage.ktx)
+    debugImplementation(libs.firebase.appcheck.debug)
+    releaseImplementation(libs.firebase.appcheck.playintegrity)
 
-    // ── Google Sign-In (Credential Manager) ──────────────────────────────────
+    // Google Sign-In
     implementation(libs.google.id)
     implementation(libs.credentials)
     implementation(libs.credentials.play.services)
 
-    // ── Image loading (Coil) ─────────────────────────────────────────────────
+    // Coil
     implementation(libs.coil.compose)
-    implementation(libs.coil.pdf)                           // PDF thumbnail support
 
-    // ── WorkManager (background sync) ────────────────────────────────────────
+    // WorkManager + Hilt
     implementation(libs.work.runtime.ktx)
     implementation(libs.hilt.work)
     ksp(libs.hilt.work.compiler)
 
-    // ── Coroutines ───────────────────────────────────────────────────────────
+    // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.kotlinx.coroutines.play.services)   // await() for Firebase Tasks
+    implementation(libs.kotlinx.coroutines.play.services)
 
-    // ── DataStore (token / session prefs) ────────────────────────────────────
+    // DataStore
     implementation(libs.datastore.preferences)
 }
