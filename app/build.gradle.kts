@@ -17,11 +17,17 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"\"")
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "ENABLE_FIREBASE_APP_CHECK", "false")
+        }
+
         release {
             isMinifyEnabled = false
+            buildConfigField("boolean", "ENABLE_FIREBASE_APP_CHECK", "false")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -37,6 +43,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
