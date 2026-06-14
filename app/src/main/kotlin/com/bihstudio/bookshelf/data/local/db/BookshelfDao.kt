@@ -35,6 +35,15 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE ownerId = :ownerId AND isSynced = 0")
     suspend fun getUnsyncedBooks(ownerId: String): List<BookEntity>
 
+    @Query(
+        """
+        SELECT * FROM books
+        WHERE isSynced = 0
+        AND (ownerId = :userId OR sharedEditorIds LIKE '%' || :editorToken || '%')
+        """
+    )
+    suspend fun getUnsyncedAccessibleBooks(userId: String, editorToken: String): List<BookEntity>
+
     /** Bulk-insert used during remote restore. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBooks(books: List<BookEntity>)

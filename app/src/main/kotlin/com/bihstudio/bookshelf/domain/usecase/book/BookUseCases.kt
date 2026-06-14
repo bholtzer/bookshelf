@@ -74,10 +74,49 @@ class SetBookCoverUseCase @Inject constructor(
         return bookRepository.updateBook(
             existing.copy(
                 coverPageId = coverPageId,
+                customCoverUri = null,
+                customCoverRemoteUrl = null,
+                customCoverPrompt = null,
                 updatedAt = Instant.now(),
                 isSynced = false,
             )
         )
+    }
+}
+
+class SetBookCoverStyleUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String, coverStyle: String?): AppResult<Book> {
+        val existing = bookRepository.getBook(bookId)
+            ?: return AppResult.Error("Book not found")
+        return bookRepository.updateBook(
+            existing.copy(
+                coverStyle = coverStyle?.takeIf { it.isNotBlank() },
+                coverPageId = null,
+                customCoverUri = null,
+                customCoverRemoteUrl = null,
+                customCoverPrompt = null,
+                updatedAt = Instant.now(),
+                isSynced = false,
+            )
+        )
+    }
+}
+
+class SetBookCustomCoverFromUriUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String, sourceUri: String): AppResult<Book> =
+        bookRepository.setCustomCoverFromUri(bookId, sourceUri)
+}
+
+class CreateBookCustomCoverImageUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String, prompt: String): AppResult<Book> {
+        if (prompt.isBlank()) return AppResult.Error("Cover prompt cannot be empty")
+        return bookRepository.createCustomCoverImage(bookId, prompt)
     }
 }
 

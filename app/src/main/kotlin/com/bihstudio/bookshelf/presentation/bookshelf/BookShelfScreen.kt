@@ -77,6 +77,7 @@ import com.bihstudio.bookshelf.domain.usecase.book.CreateBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.ObserveBooksUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.ObservePagesByIdsUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -389,7 +390,7 @@ private fun BookCard(
 @Composable
 private fun BookCover(book: Book, coverPage: Page?) {
     val topic = remember(book.title, book.description) {
-        CoverTopic.from(book.title, book.description)
+        CoverTopic.resolve(book.coverStyle, book.title, book.description)
     }
     Box(
         modifier = Modifier
@@ -398,7 +399,14 @@ private fun BookCover(book: Book, coverPage: Page?) {
             .clip(RoundedCornerShape(8.dp))
             .background(Brush.linearGradient(topic.colors)),
     ) {
-        if (coverPage?.pageType == PageType.IMAGE) {
+        if (book.customCoverUri != null || book.customCoverRemoteUrl != null) {
+            AsyncImage(
+                model = book.customCoverUri?.let(::File) ?: book.customCoverRemoteUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else if (coverPage?.pageType == PageType.IMAGE) {
             AsyncImage(
                 model = coverPage.remoteUrl ?: coverPage.localUri,
                 contentDescription = null,
@@ -411,6 +419,7 @@ private fun BookCover(book: Book, coverPage: Page?) {
             DefaultCoverLabel(
                 title = book.title,
                 description = book.description,
+                style = book.coverStyle,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -506,9 +515,10 @@ private fun MiniShelf() {
 private fun DefaultCoverLabel(
     title: String,
     description: String,
+    style: String?,
     modifier: Modifier = Modifier,
 ) {
-    val topic = remember(title, description) { CoverTopic.from(title, description) }
+    val topic = remember(title, description, style) { CoverTopic.resolve(style, title, description) }
     Column(
         modifier = modifier.padding(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -646,6 +656,12 @@ private enum class CoverTopic(
     );
 
     companion object {
+        fun resolve(style: String?, title: String, description: String): CoverTopic =
+            style?.let { fromStyleKey(it) } ?: from(title, description)
+
+        private fun fromStyleKey(style: String): CoverTopic? =
+            entries.firstOrNull { it.name.equals(style, ignoreCase = true) }
+
         fun from(title: String, description: String): CoverTopic {
             val text = "$title $description".lowercase()
             return entries.firstOrNull { topic ->

@@ -7,7 +7,7 @@ import com.bihstudio.bookshelf.data.local.model.PageEntity
 
 @Database(
     entities = [BookEntity::class, PageEntity::class],
-    version = 3,
+    version = 5,
     exportSchema = true,          // keep migration history in /schemas
 )
 abstract class BookshelfDatabase : RoomDatabase() {

@@ -33,10 +33,24 @@ object DatabaseModule {
         }
     }
 
+    private val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE books ADD COLUMN coverStyle TEXT")
+        }
+    }
+
+    private val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE books ADD COLUMN customCoverUri TEXT")
+            db.execSQL("ALTER TABLE books ADD COLUMN customCoverRemoteUrl TEXT")
+            db.execSQL("ALTER TABLE books ADD COLUMN customCoverPrompt TEXT")
+        }
+    }
+
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): BookshelfDatabase =
         Room.databaseBuilder(ctx, BookshelfDatabase::class.java, BookshelfDatabase.DATABASE_NAME)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
 

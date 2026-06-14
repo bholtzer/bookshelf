@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Person
@@ -78,10 +81,13 @@ import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.CreateBookCustomCoverImageUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.DeleteBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.GetBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.RenameBookUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.SetBookCustomCoverFromUriUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.SetBookCoverUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.SetBookCoverStyleUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.ShareBookWithEditorUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.AddPageFromUriUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.DeletePageUseCase
@@ -113,6 +119,9 @@ class BookDetailViewModel @Inject constructor(
     private val getBook: GetBookUseCase,
     private val renameBook: RenameBookUseCase,
     private val setBookCover: SetBookCoverUseCase,
+    private val setBookCoverStyle: SetBookCoverStyleUseCase,
+    private val setBookCustomCoverFromUri: SetBookCustomCoverFromUriUseCase,
+    private val createBookCustomCoverImage: CreateBookCustomCoverImageUseCase,
     private val shareBookWithEditor: ShareBookWithEditorUseCase,
     private val deleteBook: DeleteBookUseCase,
     private val observePages: ObservePagesUseCase,
@@ -213,6 +222,63 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
+    fun setGeneratedCoverStyle(style: String?) {
+        val bookId = _state.value.book?.id ?: return
+        if (!_state.value.canEditPages) {
+            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isSaving = true, error = null) }
+            when (val result = setBookCoverStyle(bookId, style)) {
+                is AppResult.Error -> _state.update {
+                    it.copy(isSaving = false, error = result.message)
+                }
+                is AppResult.Success -> _state.update {
+                    it.copy(isSaving = false, book = result.data)
+                }
+            }
+        }
+    }
+
+    fun setCustomCoverFromUri(sourceUri: String) {
+        val bookId = _state.value.book?.id ?: return
+        if (!_state.value.canEditPages) {
+            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isSaving = true, error = null) }
+            when (val result = setBookCustomCoverFromUri(bookId, sourceUri)) {
+                is AppResult.Error -> _state.update {
+                    it.copy(isSaving = false, error = result.message)
+                }
+                is AppResult.Success -> _state.update {
+                    it.copy(isSaving = false, book = result.data)
+                }
+            }
+        }
+    }
+
+    fun createCustomCoverImage(prompt: String) {
+        val bookId = _state.value.book?.id ?: return
+        if (!_state.value.canEditPages) {
+            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(isSaving = true, error = null) }
+            when (val result = createBookCustomCoverImage(bookId, prompt)) {
+                is AppResult.Error -> _state.update {
+                    it.copy(isSaving = false, error = result.message)
+                }
+                is AppResult.Success -> _state.update {
+                    it.copy(isSaving = false, book = result.data)
+                }
+            }
+        }
+    }
+
     fun shareWithEditor(editorUserId: String) {
         val userId = getCurrentUser()?.uid ?: return
         val bookId = _state.value.book?.id ?: return
@@ -261,6 +327,7 @@ fun BookDetailScreen(
     val context = LocalContext.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
+    var showCreateCoverDialog by remember { mutableStateOf(false) }
     var title by remember(state.book?.id) { mutableStateOf(state.book?.title.orEmpty()) }
     var description by remember(state.book?.id) { mutableStateOf(state.book?.description.orEmpty()) }
     val filePicker = rememberLauncherForActivityResult(
@@ -268,6 +335,11 @@ fun BookDetailScreen(
     ) { uris ->
         val picked = uris.mapNotNull { context.toPickedFile(it) }
         viewModel.addFiles(picked)
+    }
+    val coverPhotoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.setCustomCoverFromUri(uri.toString())
     }
 
     androidx.compose.runtime.LaunchedEffect(bookId) {
@@ -369,6 +441,9 @@ fun BookDetailScreen(
                             pages = state.pages,
                             canEditPages = state.canEditPages,
                             onClearCover = { viewModel.setCover(null) },
+                            onSetGeneratedStyle = { style -> viewModel.setGeneratedCoverStyle(style) },
+                            onChoosePhoto = { coverPhotoPicker.launch(arrayOf("image/*")) },
+                            onCreateImage = { showCreateCoverDialog = true },
                         )
                     }
                 }
@@ -431,6 +506,17 @@ fun BookDetailScreen(
             onConfirm = { editorUserId ->
                 viewModel.shareWithEditor(editorUserId)
                 showShareDialog = false
+            },
+        )
+    }
+
+    if (showCreateCoverDialog) {
+        CreateCoverImageDialog(
+            isSaving = state.isSaving,
+            onDismiss = { showCreateCoverDialog = false },
+            onConfirm = { prompt ->
+                viewModel.createCustomCoverImage(prompt)
+                showCreateCoverDialog = false
             },
         )
     }
@@ -571,49 +657,159 @@ private fun CoverPickerPreview(
     pages: List<Page>,
     canEditPages: Boolean,
     onClearCover: () -> Unit,
+    onSetGeneratedStyle: (String?) -> Unit,
+    onChoosePhoto: () -> Unit,
+    onCreateImage: () -> Unit,
 ) {
     val coverPage = pages.firstOrNull { it.id == book.coverPageId }
     ElevatedCard(Modifier.fillMaxWidth()) {
-        Row(
+        Column(
             modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CoverThumbnail(
-                title = book.title,
-                description = book.description,
-                page = coverPage,
-                modifier = Modifier.size(width = 84.dp, height = 116.dp),
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Book cover", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    coverPage?.originalFileName?.ifBlank { "Selected page" }
-                        ?: "Using generated cover",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                CoverThumbnail(
+                    title = book.title,
+                    description = book.description,
+                    style = book.coverStyle,
+                    customCoverUri = book.customCoverUri,
+                    customCoverRemoteUrl = book.customCoverRemoteUrl,
+                    page = coverPage,
+                    modifier = Modifier.size(width = 84.dp, height = 116.dp),
                 )
-                if (book.coverPageId != null) {
-                    TextButton(
-                        enabled = canEditPages,
-                        onClick = onClearCover,
-                    ) { Text("Use generated cover") }
-                }
-                if (!canEditPages) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("Book cover", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "View only. Ask the owner to share edit access.",
+                        if (book.customCoverUri != null || book.customCoverRemoteUrl != null) {
+                            book.customCoverPrompt?.let { "Created image: $it" } ?: "Custom photo cover"
+                        } else coverPage?.originalFileName?.ifBlank { "Selected page" }
+                            ?: if (book.coverStyle == null) "Automatic generated cover" else "Custom generated cover",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (book.coverPageId != null) {
+                        TextButton(
+                            enabled = canEditPages,
+                            onClick = onClearCover,
+                        ) { Text("Use generated cover") }
+                    }
+                    if (!canEditPages) {
+                        Text(
+                            "View only. Ask the owner to share edit access.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            Text("Make your own cover", style = MaterialTheme.typography.labelLarge)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Button(
+                    enabled = canEditPages,
+                    onClick = onChoosePhoto,
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = null)
+                    Text("Photo")
+                }
+                Button(
+                    enabled = canEditPages,
+                    onClick = onCreateImage,
+                ) {
+                    Icon(Icons.Default.Brush, contentDescription = null)
+                    Text("Create")
+                }
+            }
+
+            Text("Generated cover style", style = MaterialTheme.typography.labelLarge)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CoverStyleChip(
+                    label = "Automatic",
+                    selected = book.coverPageId == null && book.coverStyle == null,
+                    enabled = canEditPages,
+                    onClick = { onSetGeneratedStyle(null) },
+                )
+                CoverTopic.manualStyles.forEach { topic ->
+                    CoverStyleChip(
+                        label = topic.label,
+                        selected = book.coverPageId == null && book.coverStyle == topic.name,
+                        enabled = canEditPages,
+                        onClick = { onSetGeneratedStyle(topic.name) },
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CoverStyleChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    if (selected) {
+        Button(enabled = enabled, onClick = onClick) { Text(label) }
+    } else {
+        TextButton(enabled = enabled, onClick = onClick) { Text(label) }
+    }
+}
+
+@Composable
+private fun CreateCoverImageDialog(
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var prompt by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Create cover image") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Describe the cover you want. The app will create a styled cover image from your prompt.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    label = { Text("Cover idea") },
+                    placeholder = { Text("Example: cozy cooking notebook with warm colors") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = prompt.isNotBlank() && !isSaving,
+                onClick = { onConfirm(prompt.trim()) },
+            ) { Text("Create") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
@@ -706,10 +902,13 @@ private fun PageRow(
 private fun CoverThumbnail(
     title: String,
     description: String = "",
+    style: String? = null,
+    customCoverUri: String? = null,
+    customCoverRemoteUrl: String? = null,
     page: Page?,
     modifier: Modifier = Modifier,
 ) {
-    val topic = remember(title, description) { CoverTopic.from(title, description) }
+    val topic = remember(title, description, style) { CoverTopic.resolve(style, title, description) }
     Box(
         modifier = modifier
             .aspectRatio(0.72f)
@@ -723,7 +922,14 @@ private fun CoverThumbnail(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        when (page?.pageType) {
+        if (customCoverUri != null || customCoverRemoteUrl != null) {
+            AsyncImage(
+                model = customCoverUri?.let { java.io.File(it) } ?: customCoverRemoteUrl,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        } else when (page?.pageType) {
             PageType.IMAGE -> AsyncImage(
                 model = page.remoteUrl ?: page.localUri,
                 contentDescription = null,
@@ -752,62 +958,82 @@ private fun defaultCoverBrush(seed: String): Brush {
 }
 
 private enum class CoverTopic(
+    val label: String,
     val icon: ImageVector,
     val colors: List<Color>,
     val keywords: List<String>,
 ) {
     MUSIC(
+        label = "Music",
         icon = Icons.Default.MusicNote,
         colors = listOf(Color(0xFF2D1B69), Color(0xFFB5179E), Color(0xFFF72585)),
         keywords = listOf("music", "song", "songs", "piano", "guitar", "vocal", "voice", "band", "album", "melody", "chord"),
     ),
     LEARNING(
+        label = "Learning",
         icon = Icons.Default.School,
         colors = listOf(Color(0xFF12355B), Color(0xFF2A9D8F), Color(0xFFE9C46A)),
         keywords = listOf("learn", "learning", "study", "school", "lesson", "course", "class", "education", "notes", "exam", "math", "science"),
     ),
     COOKING(
+        label = "Cooking",
         icon = Icons.Default.Restaurant,
         colors = listOf(Color(0xFF7A2E20), Color(0xFFE76F51), Color(0xFFF4A261)),
         keywords = listOf("cook", "cooking", "recipe", "recipes", "food", "kitchen", "bake", "baking", "meal", "dinner", "cake"),
     ),
     PERSON(
+        label = "Person",
         icon = Icons.Default.Person,
         colors = listOf(Color(0xFF3D315B), Color(0xFF8F6593), Color(0xFFF7B2BD)),
         keywords = listOf("person", "people", "profile", "family", "friend", "baby", "life", "diary", "journal", "biography", "memories"),
     ),
     TRAVEL(
+        label = "Travel",
         icon = Icons.Default.Public,
         colors = listOf(Color(0xFF005F73), Color(0xFF0A9396), Color(0xFF94D2BD)),
         keywords = listOf("travel", "trip", "vacation", "journey", "city", "country", "flight", "hotel", "map", "tour"),
     ),
     BUSINESS(
+        label = "Business",
         icon = Icons.Default.BusinessCenter,
         colors = listOf(Color(0xFF1D3557), Color(0xFF457B9D), Color(0xFFA8DADC)),
         keywords = listOf("business", "work", "project", "meeting", "office", "client", "finance", "plan", "startup"),
     ),
     FITNESS(
+        label = "Fitness",
         icon = Icons.Default.FitnessCenter,
         colors = listOf(Color(0xFF1B4332), Color(0xFF40916C), Color(0xFF95D5B2)),
         keywords = listOf("fitness", "sport", "sports", "gym", "training", "workout", "health", "run", "running", "yoga"),
     ),
     TECH(
+        label = "Tech",
         icon = Icons.Default.Code,
         colors = listOf(Color(0xFF0B132B), Color(0xFF3A506B), Color(0xFF5BC0BE)),
         keywords = listOf("code", "coding", "programming", "android", "software", "tech", "computer", "app", "ai", "data"),
     ),
     ART(
+        label = "Art",
         icon = Icons.Default.Brush,
         colors = listOf(Color(0xFF4A4E69), Color(0xFF9A8C98), Color(0xFFC9ADA7)),
         keywords = listOf("art", "draw", "drawing", "paint", "painting", "design", "creative", "sketch", "photo", "photos"),
     ),
     LIBRARY(
+        label = "Book",
         icon = Icons.Default.AutoStories,
         colors = listOf(Color(0xFF6F3F28), Color(0xFF9B6A43), Color(0xFFD6A15F)),
         keywords = emptyList(),
     );
 
     companion object {
+        val manualStyles: List<CoverTopic>
+            get() = listOf(MUSIC, LEARNING, COOKING, PERSON, TRAVEL, BUSINESS, FITNESS, TECH, ART, LIBRARY)
+
+        fun resolve(style: String?, title: String, description: String): CoverTopic =
+            style?.let { fromStyleKey(it) } ?: from(title, description)
+
+        private fun fromStyleKey(style: String): CoverTopic? =
+            entries.firstOrNull { it.name.equals(style, ignoreCase = true) }
+
         fun from(title: String, description: String): CoverTopic {
             val text = "$title $description".lowercase()
             return entries.firstOrNull { topic ->
