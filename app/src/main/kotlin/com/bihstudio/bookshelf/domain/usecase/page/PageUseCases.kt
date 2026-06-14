@@ -3,6 +3,7 @@ package com.bihstudio.bookshelf.domain.usecase.page
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
+import com.bihstudio.bookshelf.domain.repository.BookRepository
 import com.bihstudio.bookshelf.domain.repository.PageRepository
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
@@ -25,6 +26,7 @@ class ObservePagesByIdsUseCase @Inject constructor(
 
 class AddPageFromUriUseCase @Inject constructor(
     private val pageRepository: PageRepository,
+    private val bookRepository: BookRepository,
 ) {
     /**
      * Called when the user shares an image/PDF into the app, or picks one manually.
@@ -41,6 +43,11 @@ class AddPageFromUriUseCase @Inject constructor(
         originalFileName: String = "",
         position: Int = -1,
     ): AppResult<Page> {
+        val book = bookRepository.getBook(bookId)
+            ?: return AppResult.Error("Book not found")
+        if (!book.canEditPages(ownerId)) {
+            return AppResult.Error("This book was not shared with permission to edit pages")
+        }
         val pageType = when {
             mimeType.startsWith("image/") -> PageType.IMAGE
             mimeType == "application/pdf" -> PageType.PDF
@@ -71,7 +78,35 @@ class ReorderPagesUseCase @Inject constructor(
 
 class DeletePageUseCase @Inject constructor(
     private val pageRepository: PageRepository,
+    private val bookRepository: BookRepository,
 ) {
-    suspend operator fun invoke(pageId: String): AppResult<Unit> =
-        pageRepository.deletePage(pageId)
+    suspend operator fun invoke(pageId: String, currentUserId: String): AppResult<Unit> {
+        val page = pageRepository.getPage(pageId)
+            ?: return AppResult.Error("Page not found")
+        val book = bookRepository.getBook(page.bookId)
+            ?: return AppResult.Error("Book not found")
+        if (book.ownerId != currentUserId) {
+            return AppResult.Error("Only the book owner can remove pages")
+        }
+        return pageRepository.deletePage(pageId)
+    }
+}
+
+class RecommendPageRemovalUseCase @Inject constructor(
+    private val pageRepository: PageRepository,
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(pageId: String, currentUserId: String): AppResult<Page> {
+        val page = pageRepository.getPage(pageId)
+            ?: return AppResult.Error("Page not found")
+        val book = bookRepository.getBook(page.bookId)
+            ?: return AppResult.Error("Book not found")
+        if (!book.canEditPages(currentUserId)) {
+            return AppResult.Error("This book was not shared with permission to edit pages")
+        }
+        if (book.ownerId == currentUserId) {
+            return AppResult.Error("Owners can remove pages directly")
+        }
+        return pageRepository.recommendPageRemoval(pageId, currentUserId)
+    }
 }

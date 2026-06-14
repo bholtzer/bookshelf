@@ -30,6 +30,8 @@ interface PageRepository {
 
     suspend fun deletePage(pageId: String): AppResult<Unit>
 
+    suspend fun recommendPageRemoval(pageId: String, userId: String): AppResult<Page>
+
     /**
      * Upload any locally-stored pages that haven't been pushed to Firebase Storage yet.
      * Called by SyncWorker.
@@ -39,5 +41,5 @@ interface PageRepository {
     /**
      * Download all remote pages for a book (after account restore).
      */
-    suspend fun syncFromRemote(bookId: String): AppResult<Int>
+    suspend fun syncFromRemote(ownerId: String, bookId: String): AppResult<Int>
 }

@@ -24,8 +24,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.BusinessCenter
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CardDefaults
@@ -50,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -378,12 +388,15 @@ private fun BookCard(
 
 @Composable
 private fun BookCover(book: Book, coverPage: Page?) {
+    val topic = remember(book.title, book.description) {
+        CoverTopic.from(book.title, book.description)
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(0.66f)
             .clip(RoundedCornerShape(8.dp))
-            .background(defaultCoverBrush(book.title)),
+            .background(Brush.linearGradient(topic.colors)),
     ) {
         if (coverPage?.pageType == PageType.IMAGE) {
             AsyncImage(
@@ -397,6 +410,7 @@ private fun BookCover(book: Book, coverPage: Page?) {
         } else {
             DefaultCoverLabel(
                 title = book.title,
+                description = book.description,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -489,24 +503,31 @@ private fun MiniShelf() {
 }
 
 @Composable
-private fun DefaultCoverLabel(title: String, modifier: Modifier = Modifier) {
+private fun DefaultCoverLabel(
+    title: String,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    val topic = remember(title, description) { CoverTopic.from(title, description) }
     Column(
         modifier = modifier.padding(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(
-            Icons.Default.Book,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(32.dp),
-        )
+        TopicMark(topic = topic)
         Text(
             title.ifBlank { "Untitled" },
             style = MaterialTheme.typography.titleMedium,
             color = Color.White,
             fontWeight = FontWeight.Bold,
             maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            topic.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.78f),
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
@@ -535,15 +556,103 @@ private fun PdfCoverLabel(modifier: Modifier = Modifier) {
 }
 
 private fun defaultCoverBrush(seed: String): Brush {
-    val palettes = listOf(
-        listOf(Color(0xFF355C7D), Color(0xFFC06C84), Color(0xFFF8B195)),
-        listOf(Color(0xFF1D3557), Color(0xFF2A9D8F), Color(0xFFE9C46A)),
-        listOf(Color(0xFF4A4E69), Color(0xFF9A8C98), Color(0xFFC9ADA7)),
-        listOf(Color(0xFF264653), Color(0xFFE76F51), Color(0xFFF4A261)),
-        listOf(Color(0xFF3A506B), Color(0xFF5BC0BE), Color(0xFFEEF5DB)),
-    )
-    val colors = palettes[Math.floorMod(seed.hashCode(), palettes.size)]
-    return Brush.linearGradient(colors)
+    val topic = CoverTopic.from(seed, "")
+    return Brush.linearGradient(topic.colors)
+}
+
+@Composable
+private fun TopicMark(topic: CoverTopic) {
+    Box(
+        modifier = Modifier
+            .size(58.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            topic.icon,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(34.dp),
+        )
+    }
+}
+
+private enum class CoverTopic(
+    val label: String,
+    val icon: ImageVector,
+    val colors: List<Color>,
+    val keywords: List<String>,
+) {
+    MUSIC(
+        label = "Music",
+        icon = Icons.Default.MusicNote,
+        colors = listOf(Color(0xFF2D1B69), Color(0xFFB5179E), Color(0xFFF72585)),
+        keywords = listOf("music", "song", "songs", "piano", "guitar", "vocal", "voice", "band", "album", "melody", "chord"),
+    ),
+    LEARNING(
+        label = "Learning",
+        icon = Icons.Default.School,
+        colors = listOf(Color(0xFF12355B), Color(0xFF2A9D8F), Color(0xFFE9C46A)),
+        keywords = listOf("learn", "learning", "study", "school", "lesson", "course", "class", "education", "notes", "exam", "math", "science"),
+    ),
+    COOKING(
+        label = "Cooking",
+        icon = Icons.Default.Restaurant,
+        colors = listOf(Color(0xFF7A2E20), Color(0xFFE76F51), Color(0xFFF4A261)),
+        keywords = listOf("cook", "cooking", "recipe", "recipes", "food", "kitchen", "bake", "baking", "meal", "dinner", "cake"),
+    ),
+    PERSON(
+        label = "Person",
+        icon = Icons.Default.Person,
+        colors = listOf(Color(0xFF3D315B), Color(0xFF8F6593), Color(0xFFF7B2BD)),
+        keywords = listOf("person", "people", "profile", "family", "friend", "baby", "life", "diary", "journal", "biography", "memories"),
+    ),
+    TRAVEL(
+        label = "Travel",
+        icon = Icons.Default.Public,
+        colors = listOf(Color(0xFF005F73), Color(0xFF0A9396), Color(0xFF94D2BD)),
+        keywords = listOf("travel", "trip", "vacation", "journey", "city", "country", "flight", "hotel", "map", "tour"),
+    ),
+    BUSINESS(
+        label = "Business",
+        icon = Icons.Default.BusinessCenter,
+        colors = listOf(Color(0xFF1D3557), Color(0xFF457B9D), Color(0xFFA8DADC)),
+        keywords = listOf("business", "work", "project", "meeting", "office", "client", "finance", "plan", "startup"),
+    ),
+    FITNESS(
+        label = "Fitness",
+        icon = Icons.Default.FitnessCenter,
+        colors = listOf(Color(0xFF1B4332), Color(0xFF40916C), Color(0xFF95D5B2)),
+        keywords = listOf("fitness", "sport", "sports", "gym", "training", "workout", "health", "run", "running", "yoga"),
+    ),
+    TECH(
+        label = "Tech",
+        icon = Icons.Default.Code,
+        colors = listOf(Color(0xFF0B132B), Color(0xFF3A506B), Color(0xFF5BC0BE)),
+        keywords = listOf("code", "coding", "programming", "android", "software", "tech", "computer", "app", "ai", "data"),
+    ),
+    ART(
+        label = "Art",
+        icon = Icons.Default.Brush,
+        colors = listOf(Color(0xFF4A4E69), Color(0xFF9A8C98), Color(0xFFC9ADA7)),
+        keywords = listOf("art", "draw", "drawing", "paint", "painting", "design", "creative", "sketch", "photo", "photos"),
+    ),
+    LIBRARY(
+        label = "Book",
+        icon = Icons.Default.Book,
+        colors = listOf(Color(0xFF6F3F28), Color(0xFF9B6A43), Color(0xFFD6A15F)),
+        keywords = emptyList(),
+    );
+
+    companion object {
+        fun from(title: String, description: String): CoverTopic {
+            val text = "$title $description".lowercase()
+            return entries.firstOrNull { topic ->
+                topic.keywords.any { keyword -> text.contains(keyword) }
+            } ?: LIBRARY
+        }
+    }
 }
 
 @Composable

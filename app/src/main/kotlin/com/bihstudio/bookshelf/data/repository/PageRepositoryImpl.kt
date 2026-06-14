@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import com.bihstudio.bookshelf.data.local.db.BookDao
 import com.bihstudio.bookshelf.data.local.db.PageDao
+import com.bihstudio.bookshelf.data.local.model.PageEntity
 import com.bihstudio.bookshelf.data.local.model.toEntity
 import com.bihstudio.bookshelf.data.local.model.toDomain
+import com.bihstudio.bookshelf.data.local.model.toRemovalSuggestionIdStorage
+import com.bihstudio.bookshelf.data.remote.SyncWorker
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.repository.PageRepository
@@ -64,6 +67,7 @@ class PageRepositoryImpl @Inject constructor(
             count     = newCount,
             updatedAt = Instant.now().toEpochMilli(),
         )
+        SyncWorker.enqueueImmediateSync(context)
 
         savedPage
     }.toAppResult()
@@ -100,30 +104,54 @@ class PageRepositoryImpl @Inject constructor(
             count     = newCount,
             updatedAt = Instant.now().toEpochMilli(),
         )
+        SyncWorker.enqueueImmediateSync(context)
+    }.toAppResult()
+
+    override suspend fun recommendPageRemoval(pageId: String, userId: String): AppResult<Page> = runCatching {
+        val entity = pageDao.getPage(pageId) ?: error("Page not found")
+        val page = entity.toDomain()
+        val updated = page.copy(
+            removalSuggestedByIds = (page.removalSuggestedByIds + userId).distinct(),
+            isSynced = false,
+        )
+        pageDao.updateRemovalSuggestions(
+            pageId = pageId,
+            suggestedByIds = updated.removalSuggestedByIds.toRemovalSuggestionIdStorage(),
+        )
+        SyncWorker.enqueueImmediateSync(context)
+        updated
     }.toAppResult()
 
     // ── Sync: upload pending pages to Firebase Storage ────────────────────────
 
     override suspend fun uploadPendingPages(ownerId: String): AppResult<Int> = runCatching {
-        val unsynced = pageDao.getUnsyncedPages(ownerId)
+        val unsynced = pageDao.getUnsyncedPagesForAccessibleBooks(
+            userId = ownerId,
+            editorToken = "|$ownerId|",
+        )
         var count = 0
         for (entity in unsynced) {
             try {
+                val bookOwnerId = bookDao.getBook(entity.bookId)?.ownerId ?: entity.ownerId
                 val localFile = entity.localUri?.let { File(it) }
-                if (localFile == null || !localFile.exists()) {
+                if ((entity.remoteUrl == null || entity.remoteUrl.isBlank()) && (localFile == null || !localFile.exists())) {
                     pageDao.markSyncError(entity.id, "Local file missing")
                     continue
                 }
 
                 // Upload to: users/{ownerId}/books/{bookId}/pages/{pageId}.ext
-                val extension = localFile.extension
-                val remotePath = "users/${entity.ownerId}/books/${entity.bookId}/pages/${entity.id}.$extension"
-                val ref = storage.reference.child(remotePath)
-                ref.putFile(Uri.fromFile(localFile)).await()
-                val downloadUrl = ref.downloadUrl.await().toString()
+                val downloadUrl = if (localFile != null && localFile.exists()) {
+                    val extension = localFile.extension
+                    val remotePath = "users/$bookOwnerId/books/${entity.bookId}/pages/${entity.id}.$extension"
+                    val ref = storage.reference.child(remotePath)
+                    ref.putFile(Uri.fromFile(localFile)).await()
+                    ref.downloadUrl.await().toString()
+                } else {
+                    entity.remoteUrl.orEmpty()
+                }
 
                 // Update Firestore page document
-                pagesCollection(entity.ownerId, entity.bookId)
+                pagesCollection(bookOwnerId, entity.bookId)
                     .document(entity.id)
                     .set(entity.toFirestoreMap(downloadUrl), SetOptions.merge())
                     .await()
@@ -139,11 +167,16 @@ class PageRepositoryImpl @Inject constructor(
 
     // ── Sync: pull from Firestore (restore) ───────────────────────────────────
 
-    override suspend fun syncFromRemote(bookId: String): AppResult<Int> = runCatching {
+    override suspend fun syncFromRemote(ownerId: String, bookId: String): AppResult<Int> = runCatching {
         // Pages under a book are stored at: users/{uid}/books/{bookId}/pages
         // We'd need the ownerId here — in practice the SyncWorker passes it separately.
         // For now, no-op placeholder — full implementation wired in SyncWorker.
-        0
+        val snapshot = pagesCollection(ownerId, bookId).get().await()
+        val pages = snapshot.documents.mapNotNull { doc ->
+            doc.toPageEntity(ownerId, bookId)
+        }
+        pageDao.insertPages(pages)
+        pages.size
     }.toAppResult()
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -174,9 +207,37 @@ class PageRepositoryImpl @Inject constructor(
         "pageType"         to pageType,
         "remoteUrl"        to downloadUrl,
         "originalFileName" to originalFileName,
+        "removalSuggestedByIds" to removalSuggestedByIds.toIdList(),
         "createdAt"        to createdAt,
     )
+
+    private fun com.google.firebase.firestore.DocumentSnapshot.toPageEntity(
+        ownerId: String,
+        bookId: String,
+    ): PageEntity? {
+        val id = getString("id") ?: return null
+        return PageEntity(
+            id = id,
+            bookId = getString("bookId") ?: bookId,
+            ownerId = getString("ownerId") ?: ownerId,
+            position = getLong("position")?.toInt() ?: 0,
+            pageType = getString("pageType") ?: return null,
+            localUri = null,
+            remoteUrl = getString("remoteUrl"),
+            originalFileName = getString("originalFileName") ?: "",
+            removalSuggestedByIds = get("removalSuggestedByIds").toStringList().toRemovalSuggestionIdStorage(),
+            createdAt = getLong("createdAt") ?: Instant.now().toEpochMilli(),
+            isSynced = true,
+            syncError = null,
+        )
+    }
 }
+
+private fun String.toIdList(): List<String> =
+    split("|").filter { it.isNotBlank() }
+
+private fun Any?.toStringList(): List<String> =
+    (this as? List<*>)?.mapNotNull { it as? String }.orEmpty()
 
 private fun <T> Result<T>.toAppResult(): AppResult<T> =
     fold(

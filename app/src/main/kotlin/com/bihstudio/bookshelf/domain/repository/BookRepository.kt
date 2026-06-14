@@ -16,6 +16,8 @@ interface BookRepository {
 
     suspend fun updateBook(book: Book): AppResult<Book>
 
+    suspend fun shareBookWithEditor(bookId: String, ownerId: String, editorUserId: String): AppResult<Book>
+
     suspend fun deleteBook(bookId: String): AppResult<Unit>
 
     /**

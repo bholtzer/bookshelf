@@ -16,6 +16,7 @@ data class BookEntity(
     val title: String,
     val description: String,
     val coverPageId: String?,
+    val sharedEditorIds: String,
     val pageCount: Int,
     val createdAt: Long,        // epoch millis — Room can't store Instant natively
     val updatedAt: Long,
@@ -30,6 +31,7 @@ fun BookEntity.toDomain() = Book(
     title = title,
     description = description,
     coverPageId = coverPageId,
+    sharedEditorIds = sharedEditorIds.toEditorIdList(),
     pageCount = pageCount,
     createdAt = Instant.ofEpochMilli(createdAt),
     updatedAt = Instant.ofEpochMilli(updatedAt),
@@ -42,8 +44,17 @@ fun Book.toEntity() = BookEntity(
     title = title,
     description = description,
     coverPageId = coverPageId,
+    sharedEditorIds = sharedEditorIds.toEditorIdStorage(),
     pageCount = pageCount,
     createdAt = createdAt.toEpochMilli(),
     updatedAt = updatedAt.toEpochMilli(),
     isSynced = isSynced,
 )
+
+fun List<String>.toEditorIdStorage(): String =
+    distinct()
+        .filter { it.isNotBlank() }
+        .joinToString(separator = "", prefix = "|", postfix = "|")
+
+private fun String.toEditorIdList(): List<String> =
+    split("|").filter { it.isNotBlank() }

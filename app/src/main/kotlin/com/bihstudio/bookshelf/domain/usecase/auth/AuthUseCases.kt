@@ -3,6 +3,8 @@ package com.bihstudio.bookshelf.domain.usecase.auth
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.User
 import com.bihstudio.bookshelf.domain.repository.AuthRepository
+import com.bihstudio.bookshelf.domain.repository.BookRepository
+import com.bihstudio.bookshelf.domain.repository.PageRepository
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 
@@ -54,4 +56,21 @@ class SignOutUseCase @Inject constructor(
     private val authRepository: AuthRepository,
 ) {
     suspend operator fun invoke(): AppResult<Unit> = authRepository.signOut()
+}
+
+class RestoreUserLibraryUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+    private val pageRepository: PageRepository,
+) {
+    suspend operator fun invoke(userId: String): AppResult<Int> {
+        when (val booksUploaded = bookRepository.syncToRemote(userId)) {
+            is AppResult.Error -> return booksUploaded
+            is AppResult.Success -> Unit
+        }
+        when (val pagesUploaded = pageRepository.uploadPendingPages(userId)) {
+            is AppResult.Error -> return pagesUploaded
+            is AppResult.Success -> Unit
+        }
+        return bookRepository.syncFromRemote(userId)
+    }
 }

@@ -2,6 +2,8 @@ package com.bihstudio.bookshelf.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.bihstudio.bookshelf.data.local.db.*
 import com.bihstudio.bookshelf.data.repository.*
 import com.bihstudio.bookshelf.domain.repository.*
@@ -19,9 +21,22 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
+    private val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE books ADD COLUMN sharedEditorIds TEXT NOT NULL DEFAULT '||'")
+        }
+    }
+
+    private val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE pages ADD COLUMN removalSuggestedByIds TEXT NOT NULL DEFAULT '||'")
+        }
+    }
+
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): BookshelfDatabase =
         Room.databaseBuilder(ctx, BookshelfDatabase::class.java, BookshelfDatabase.DATABASE_NAME)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
 

@@ -46,6 +46,7 @@ class AuthRepositoryImpl @Inject constructor(
     ): AppResult<User> = runCatching {
         val result = firebaseAuth.signInWithEmailAndPassword(email, password).await()
         val user = result.user ?: error("Sign-in succeeded but user is null")
+        upsertUserDocument(user)
         user.toDomain()
     }.toAppResult()
 

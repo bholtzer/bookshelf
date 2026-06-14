@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.usecase.auth.RegisterWithEmailPasswordUseCase
+import com.bihstudio.bookshelf.domain.usecase.auth.RestoreUserLibraryUseCase
 import com.bihstudio.bookshelf.domain.usecase.auth.SignInWithEmailPasswordUseCase
 import com.bihstudio.bookshelf.domain.usecase.auth.SignInWithGoogleUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,6 +29,7 @@ class AuthViewModel @Inject constructor(
     private val signInWithGoogle: SignInWithGoogleUseCase,
     private val signInWithEmail: SignInWithEmailPasswordUseCase,
     private val registerWithEmail: RegisterWithEmailPasswordUseCase,
+    private val restoreUserLibrary: RestoreUserLibraryUseCase,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AuthUiState())
@@ -37,7 +39,7 @@ class AuthViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val result = signInWithGoogle(idToken)) {
-                is AppResult.Success -> _uiState.update { it.copy(isLoading = false, isSignedIn = true) }
+                is AppResult.Success -> finishSignIn(result.data.uid)
                 is AppResult.Error   -> _uiState.update { it.copy(isLoading = false, error = result.message) }
             }
         }
@@ -47,7 +49,7 @@ class AuthViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val result = signInWithEmail(email, password)) {
-                is AppResult.Success -> _uiState.update { it.copy(isLoading = false, isSignedIn = true) }
+                is AppResult.Success -> finishSignIn(result.data.uid)
                 is AppResult.Error   -> _uiState.update { it.copy(isLoading = false, error = result.message) }
             }
         }
@@ -57,8 +59,19 @@ class AuthViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val result = registerWithEmail(email, password, displayName)) {
-                is AppResult.Success -> _uiState.update { it.copy(isLoading = false, isSignedIn = true) }
+                is AppResult.Success -> finishSignIn(result.data.uid)
                 is AppResult.Error   -> _uiState.update { it.copy(isLoading = false, error = result.message) }
+            }
+        }
+    }
+
+    private suspend fun finishSignIn(userId: String) {
+        when (val restore = restoreUserLibrary(userId)) {
+            is AppResult.Error -> _uiState.update {
+                it.copy(isLoading = false, error = restore.message)
+            }
+            is AppResult.Success -> _uiState.update {
+                it.copy(isLoading = false, isSignedIn = true)
             }
         }
     }

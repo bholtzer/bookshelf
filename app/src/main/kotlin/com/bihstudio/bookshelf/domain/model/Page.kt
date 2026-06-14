@@ -18,6 +18,7 @@ data class Page(
     val localUri: String? = null,          // content:// or file:// URI on device
     val remoteUrl: String? = null,         // Firebase Storage download URL
     val originalFileName: String = "",
+    val removalSuggestedByIds: List<String> = emptyList(),
     val createdAt: Instant = Instant.now(),
     val isSynced: Boolean = false,
     val syncError: String? = null,

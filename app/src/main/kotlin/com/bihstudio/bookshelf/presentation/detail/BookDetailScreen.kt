@@ -23,9 +23,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.BusinessCenter
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -52,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,9 +82,11 @@ import com.bihstudio.bookshelf.domain.usecase.book.DeleteBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.GetBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.RenameBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.SetBookCoverUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.ShareBookWithEditorUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.AddPageFromUriUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.DeletePageUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.ObservePagesUseCase
+import com.bihstudio.bookshelf.domain.usecase.page.RecommendPageRemovalUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,10 +98,14 @@ import kotlinx.coroutines.launch
 data class BookDetailUiState(
     val book: Book? = null,
     val pages: List<Page> = emptyList(),
+    val currentUserId: String? = null,
     val isLoading: Boolean = true,
     val isSaving: Boolean = false,
     val error: String? = null,
-)
+) {
+    val canEditPages: Boolean
+        get() = currentUserId != null && book?.canEditPages(currentUserId) == true
+}
 
 @HiltViewModel
 class BookDetailViewModel @Inject constructor(
@@ -95,10 +113,12 @@ class BookDetailViewModel @Inject constructor(
     private val getBook: GetBookUseCase,
     private val renameBook: RenameBookUseCase,
     private val setBookCover: SetBookCoverUseCase,
+    private val shareBookWithEditor: ShareBookWithEditorUseCase,
     private val deleteBook: DeleteBookUseCase,
     private val observePages: ObservePagesUseCase,
     private val addPageFromUri: AddPageFromUriUseCase,
     private val deletePage: DeletePageUseCase,
+    private val recommendPageRemovalUseCase: RecommendPageRemovalUseCase,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BookDetailUiState())
@@ -106,7 +126,8 @@ class BookDetailViewModel @Inject constructor(
 
     fun load(bookId: String) {
         viewModelScope.launch {
-            _state.update { it.copy(book = getBook(bookId)) }
+            val userId = getCurrentUser()?.uid
+            _state.update { it.copy(book = getBook(bookId), currentUserId = userId) }
             observePages(bookId).collect { pages ->
                 _state.update { it.copy(pages = pages, isLoading = false) }
             }
@@ -131,6 +152,10 @@ class BookDetailViewModel @Inject constructor(
     fun addFiles(files: List<PickedFile>) {
         val user = getCurrentUser() ?: return
         val bookId = _state.value.book?.id ?: return
+        if (!_state.value.canEditPages) {
+            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             for (file in files) {
@@ -150,13 +175,31 @@ class BookDetailViewModel @Inject constructor(
     }
 
     fun deletePage(pageId: String) {
+        val user = getCurrentUser() ?: return
         viewModelScope.launch {
-            deletePage.invoke(pageId)
+            when (val result = deletePage.invoke(pageId, user.uid)) {
+                is AppResult.Error -> _state.update { it.copy(error = result.message) }
+                is AppResult.Success -> Unit
+            }
+        }
+    }
+
+    fun recommendPageRemoval(pageId: String) {
+        val user = getCurrentUser() ?: return
+        viewModelScope.launch {
+            when (val result = recommendPageRemovalUseCase(pageId, user.uid)) {
+                is AppResult.Error -> _state.update { it.copy(error = result.message) }
+                is AppResult.Success -> Unit
+            }
         }
     }
 
     fun setCover(pageId: String?) {
         val bookId = _state.value.book?.id ?: return
+        if (!_state.value.canEditPages) {
+            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = setBookCover(bookId, pageId)) {
@@ -170,8 +213,30 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
+    fun shareWithEditor(editorUserId: String) {
+        val userId = getCurrentUser()?.uid ?: return
+        val bookId = _state.value.book?.id ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isSaving = true, error = null) }
+            when (val result = shareBookWithEditor(bookId, userId, editorUserId)) {
+                is AppResult.Error -> _state.update {
+                    it.copy(isSaving = false, error = result.message)
+                }
+                is AppResult.Success -> _state.update {
+                    it.copy(isSaving = false, book = result.data)
+                }
+            }
+        }
+    }
+
     fun deleteCurrentBook(onDeleted: () -> Unit) {
         val bookId = _state.value.book?.id ?: return
+        val userId = getCurrentUser()?.uid ?: return
+        val book = _state.value.book ?: return
+        if (book.ownerId != userId) {
+            _state.update { it.copy(error = "Only the book owner can delete this book") }
+            return
+        }
         viewModelScope.launch {
             deleteBook(bookId)
             onDeleted()
@@ -195,6 +260,7 @@ fun BookDetailScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showShareDialog by remember { mutableStateOf(false) }
     var title by remember(state.book?.id) { mutableStateOf(state.book?.title.orEmpty()) }
     var description by remember(state.book?.id) { mutableStateOf(state.book?.description.orEmpty()) }
     val filePicker = rememberLauncherForActivityResult(
@@ -218,8 +284,10 @@ fun BookDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete book")
+                    if (state.book?.ownerId == state.currentUserId) {
+                        IconButton(onClick = { showDeleteDialog = true }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete book")
+                        }
                     }
                 },
             )
@@ -273,7 +341,7 @@ fun BookDetailScreen(
                                 onClick = { viewModel.save(title, description) },
                             ) { Text("Save") }
                             Button(
-                                enabled = !state.isSaving,
+                                enabled = !state.isSaving && state.canEditPages,
                                 onClick = { filePicker.launch(arrayOf("image/*", "application/pdf")) },
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null)
@@ -285,9 +353,21 @@ fun BookDetailScreen(
 
                 item {
                     state.book?.let { book ->
+                        SharingPermissionsCard(
+                            book = book,
+                            currentUserId = state.currentUserId,
+                            canEditPages = state.canEditPages,
+                            onAddEditor = { showShareDialog = true },
+                        )
+                    }
+                }
+
+                item {
+                    state.book?.let { book ->
                         CoverPickerPreview(
                             book = book,
                             pages = state.pages,
+                            canEditPages = state.canEditPages,
                             onClearCover = { viewModel.setCover(null) },
                         )
                     }
@@ -313,8 +393,12 @@ fun BookDetailScreen(
                         PageRow(
                             page = page,
                             isCover = state.book?.coverPageId == page.id,
+                            canEditPages = state.canEditPages,
+                            isOwner = state.book?.ownerId == state.currentUserId,
+                            currentUserId = state.currentUserId,
                             onSetCover = { viewModel.setCover(page.id) },
                             onDelete = { viewModel.deletePage(page.id) },
+                            onRecommendRemoval = { viewModel.recommendPageRemoval(page.id) },
                         )
                         HorizontalDivider()
                     }
@@ -338,12 +422,154 @@ fun BookDetailScreen(
             },
         )
     }
+
+    if (showShareDialog) {
+        ShareEditorDialog(
+            isSaving = state.isSaving,
+            existingEditorIds = state.book?.sharedEditorIds.orEmpty(),
+            onDismiss = { showShareDialog = false },
+            onConfirm = { editorUserId ->
+                viewModel.shareWithEditor(editorUserId)
+                showShareDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun SharingPermissionsCard(
+    book: Book,
+    currentUserId: String?,
+    canEditPages: Boolean,
+    onAddEditor: () -> Unit,
+) {
+    val isOwner = currentUserId == book.ownerId
+
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.PersonAdd,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Column(Modifier.weight(1f)) {
+                    Text("Sharing & permissions", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (canEditPages) {
+                            "You can add and remove pages in this book."
+                        } else {
+                            "View only. Only the owner or invited editors can change pages."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Text(
+                "Owner: ${book.ownerId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${book.sharedEditorIds.size} editor${if (book.sharedEditorIds.size == 1) "" else "s"} invited",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (book.sharedEditorIds.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    book.sharedEditorIds.forEach { editorId ->
+                        Text(
+                            "Editor: $editorId",
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
+            if (isOwner) {
+                Button(
+                    enabled = true,
+                    onClick = onAddEditor,
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null)
+                    Text("Add editor")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShareEditorDialog(
+    isSaving: Boolean,
+    existingEditorIds: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var editorUserId by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add editor") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Editors can add pages, remove pages, and choose the cover for this book.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Enter the other user's account ID. They must have this app installed and be signed in.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = editorUserId,
+                    onValueChange = { editorUserId = it },
+                    label = { Text("Other user's account ID") },
+                    supportingText = { Text("This is the Firebase uid for their account.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (existingEditorIds.isNotEmpty()) {
+                    Text(
+                        "Already invited: ${existingEditorIds.size}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = editorUserId.isNotBlank() && !isSaving,
+                onClick = { onConfirm(editorUserId.trim()) },
+            ) { Text("Add editor") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
 private fun CoverPickerPreview(
     book: Book,
     pages: List<Page>,
+    canEditPages: Boolean,
     onClearCover: () -> Unit,
 ) {
     val coverPage = pages.firstOrNull { it.id == book.coverPageId }
@@ -355,6 +581,7 @@ private fun CoverPickerPreview(
         ) {
             CoverThumbnail(
                 title = book.title,
+                description = book.description,
                 page = coverPage,
                 modifier = Modifier.size(width = 84.dp, height = 116.dp),
             )
@@ -372,7 +599,17 @@ private fun CoverPickerPreview(
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (book.coverPageId != null) {
-                    TextButton(onClick = onClearCover) { Text("Use generated cover") }
+                    TextButton(
+                        enabled = canEditPages,
+                        onClick = onClearCover,
+                    ) { Text("Use generated cover") }
+                }
+                if (!canEditPages) {
+                    Text(
+                        "View only. Ask the owner to share edit access.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -383,9 +620,14 @@ private fun CoverPickerPreview(
 private fun PageRow(
     page: Page,
     isCover: Boolean,
+    canEditPages: Boolean,
+    isOwner: Boolean,
+    currentUserId: String?,
     onSetCover: () -> Unit,
     onDelete: () -> Unit,
+    onRecommendRemoval: () -> Unit,
 ) {
+    val hasRecommendedRemoval = currentUserId != null && currentUserId in page.removalSuggestedByIds
     ListItem(
         headlineContent = {
             Text(
@@ -395,10 +637,19 @@ private fun PageRow(
             )
         },
         supportingContent = {
-            Text(
-                if (page.isSynced) "Backed up" else page.syncError ?: "Waiting for backup",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Column {
+                Text(
+                    if (page.isSynced) "Backed up" else page.syncError ?: "Waiting for backup",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (page.removalSuggestedByIds.isNotEmpty()) {
+                    Text(
+                        "${page.removalSuggestedByIds.size} removal recommendation${if (page.removalSuggestedByIds.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
         },
         leadingContent = {
             CoverThumbnail(
@@ -409,7 +660,7 @@ private fun PageRow(
         },
         trailingContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onSetCover, enabled = !isCover) {
+                IconButton(onClick = onSetCover, enabled = canEditPages && !isCover) {
                     Icon(
                         if (isCover) Icons.Default.CheckCircle else Icons.Default.Star,
                         contentDescription = if (isCover) "Current cover" else "Use as cover",
@@ -420,8 +671,31 @@ private fun PageRow(
                         },
                     )
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete page")
+                if (canEditPages) {
+                    if (isOwner) {
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete page")
+                        }
+                    } else {
+                        IconButton(
+                            onClick = onRecommendRemoval,
+                            enabled = !hasRecommendedRemoval,
+                        ) {
+                            Icon(
+                                if (hasRecommendedRemoval) Icons.Default.CheckCircle else Icons.Default.Report,
+                                contentDescription = if (hasRecommendedRemoval) {
+                                    "Removal recommended"
+                                } else {
+                                    "Recommend removal"
+                                },
+                                tint = if (hasRecommendedRemoval) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -431,14 +705,22 @@ private fun PageRow(
 @Composable
 private fun CoverThumbnail(
     title: String,
+    description: String = "",
     page: Page?,
     modifier: Modifier = Modifier,
 ) {
+    val topic = remember(title, description) { CoverTopic.from(title, description) }
     Box(
         modifier = modifier
             .aspectRatio(0.72f)
             .clip(RoundedCornerShape(8.dp))
-            .background(defaultCoverBrush(title)),
+            .background(
+                if (page == null) {
+                    Brush.linearGradient(topic.colors)
+                } else {
+                    defaultCoverBrush(title)
+                }
+            ),
         contentAlignment = Alignment.Center,
     ) {
         when (page?.pageType) {
@@ -455,7 +737,7 @@ private fun CoverThumbnail(
                 modifier = Modifier.size(32.dp),
             )
             null -> Icon(
-                Icons.Default.AutoStories,
+                topic.icon,
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(32.dp),
@@ -465,15 +747,74 @@ private fun CoverThumbnail(
 }
 
 private fun defaultCoverBrush(seed: String): Brush {
-    val palettes = listOf(
-        listOf(Color(0xFF355C7D), Color(0xFFC06C84), Color(0xFFF8B195)),
-        listOf(Color(0xFF1D3557), Color(0xFF2A9D8F), Color(0xFFE9C46A)),
-        listOf(Color(0xFF4A4E69), Color(0xFF9A8C98), Color(0xFFC9ADA7)),
-        listOf(Color(0xFF264653), Color(0xFFE76F51), Color(0xFFF4A261)),
-        listOf(Color(0xFF3A506B), Color(0xFF5BC0BE), Color(0xFFEEF5DB)),
-    )
-    val colors = palettes[Math.floorMod(seed.hashCode(), palettes.size)]
-    return Brush.linearGradient(colors)
+    val topic = CoverTopic.from(seed, "")
+    return Brush.linearGradient(topic.colors)
+}
+
+private enum class CoverTopic(
+    val icon: ImageVector,
+    val colors: List<Color>,
+    val keywords: List<String>,
+) {
+    MUSIC(
+        icon = Icons.Default.MusicNote,
+        colors = listOf(Color(0xFF2D1B69), Color(0xFFB5179E), Color(0xFFF72585)),
+        keywords = listOf("music", "song", "songs", "piano", "guitar", "vocal", "voice", "band", "album", "melody", "chord"),
+    ),
+    LEARNING(
+        icon = Icons.Default.School,
+        colors = listOf(Color(0xFF12355B), Color(0xFF2A9D8F), Color(0xFFE9C46A)),
+        keywords = listOf("learn", "learning", "study", "school", "lesson", "course", "class", "education", "notes", "exam", "math", "science"),
+    ),
+    COOKING(
+        icon = Icons.Default.Restaurant,
+        colors = listOf(Color(0xFF7A2E20), Color(0xFFE76F51), Color(0xFFF4A261)),
+        keywords = listOf("cook", "cooking", "recipe", "recipes", "food", "kitchen", "bake", "baking", "meal", "dinner", "cake"),
+    ),
+    PERSON(
+        icon = Icons.Default.Person,
+        colors = listOf(Color(0xFF3D315B), Color(0xFF8F6593), Color(0xFFF7B2BD)),
+        keywords = listOf("person", "people", "profile", "family", "friend", "baby", "life", "diary", "journal", "biography", "memories"),
+    ),
+    TRAVEL(
+        icon = Icons.Default.Public,
+        colors = listOf(Color(0xFF005F73), Color(0xFF0A9396), Color(0xFF94D2BD)),
+        keywords = listOf("travel", "trip", "vacation", "journey", "city", "country", "flight", "hotel", "map", "tour"),
+    ),
+    BUSINESS(
+        icon = Icons.Default.BusinessCenter,
+        colors = listOf(Color(0xFF1D3557), Color(0xFF457B9D), Color(0xFFA8DADC)),
+        keywords = listOf("business", "work", "project", "meeting", "office", "client", "finance", "plan", "startup"),
+    ),
+    FITNESS(
+        icon = Icons.Default.FitnessCenter,
+        colors = listOf(Color(0xFF1B4332), Color(0xFF40916C), Color(0xFF95D5B2)),
+        keywords = listOf("fitness", "sport", "sports", "gym", "training", "workout", "health", "run", "running", "yoga"),
+    ),
+    TECH(
+        icon = Icons.Default.Code,
+        colors = listOf(Color(0xFF0B132B), Color(0xFF3A506B), Color(0xFF5BC0BE)),
+        keywords = listOf("code", "coding", "programming", "android", "software", "tech", "computer", "app", "ai", "data"),
+    ),
+    ART(
+        icon = Icons.Default.Brush,
+        colors = listOf(Color(0xFF4A4E69), Color(0xFF9A8C98), Color(0xFFC9ADA7)),
+        keywords = listOf("art", "draw", "drawing", "paint", "painting", "design", "creative", "sketch", "photo", "photos"),
+    ),
+    LIBRARY(
+        icon = Icons.Default.AutoStories,
+        colors = listOf(Color(0xFF6F3F28), Color(0xFF9B6A43), Color(0xFFD6A15F)),
+        keywords = emptyList(),
+    );
+
+    companion object {
+        fun from(title: String, description: String): CoverTopic {
+            val text = "$title $description".lowercase()
+            return entries.firstOrNull { topic ->
+                topic.keywords.any { keyword -> text.contains(keyword) }
+            } ?: LIBRARY
+        }
+    }
 }
 
 private fun Context.toPickedFile(uri: Uri): PickedFile? {

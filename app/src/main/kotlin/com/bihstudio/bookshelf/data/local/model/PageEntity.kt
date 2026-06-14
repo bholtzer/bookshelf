@@ -29,6 +29,7 @@ data class PageEntity(
     val localUri: String?,                 // path inside app-internal storage
     val remoteUrl: String?,
     val originalFileName: String,
+    val removalSuggestedByIds: String,
     val createdAt: Long,
     val isSynced: Boolean,
     val syncError: String?,
@@ -45,6 +46,7 @@ fun PageEntity.toDomain() = Page(
     localUri = localUri,
     remoteUrl = remoteUrl,
     originalFileName = originalFileName,
+    removalSuggestedByIds = removalSuggestedByIds.toRemovalSuggestionIdList(),
     createdAt = Instant.ofEpochMilli(createdAt),
     isSynced = isSynced,
     syncError = syncError,
@@ -59,7 +61,16 @@ fun Page.toEntity() = PageEntity(
     localUri = localUri,
     remoteUrl = remoteUrl,
     originalFileName = originalFileName,
+    removalSuggestedByIds = removalSuggestedByIds.toRemovalSuggestionIdStorage(),
     createdAt = createdAt.toEpochMilli(),
     isSynced = isSynced,
     syncError = syncError,
 )
+
+fun List<String>.toRemovalSuggestionIdStorage(): String =
+    distinct()
+        .filter { it.isNotBlank() }
+        .joinToString(separator = "", prefix = "|", postfix = "|")
+
+private fun String.toRemovalSuggestionIdList(): List<String> =
+    split("|").filter { it.isNotBlank() }

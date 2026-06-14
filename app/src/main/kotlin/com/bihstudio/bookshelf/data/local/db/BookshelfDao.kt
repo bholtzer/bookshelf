@@ -10,8 +10,14 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface BookDao {
 
-    @Query("SELECT * FROM books WHERE ownerId = :ownerId ORDER BY updatedAt DESC")
-    fun observeBooks(ownerId: String): Flow<List<BookEntity>>
+    @Query(
+        """
+        SELECT * FROM books
+        WHERE ownerId = :userId OR sharedEditorIds LIKE '%' || :editorToken || '%'
+        ORDER BY updatedAt DESC
+        """
+    )
+    fun observeAccessibleBooks(userId: String, editorToken: String): Flow<List<BookEntity>>
 
     @Query("SELECT * FROM books WHERE id = :bookId LIMIT 1")
     suspend fun getBook(bookId: String): BookEntity?
@@ -36,7 +42,7 @@ interface BookDao {
     @Query("UPDATE books SET isSynced = 1 WHERE id = :bookId")
     suspend fun markSynced(bookId: String)
 
-    @Query("UPDATE books SET pageCount = :count, updatedAt = :updatedAt WHERE id = :bookId")
+    @Query("UPDATE books SET pageCount = :count, updatedAt = :updatedAt, isSynced = 0 WHERE id = :bookId")
     suspend fun updatePageCount(bookId: String, count: Int, updatedAt: Long)
 }
 
@@ -69,6 +75,16 @@ interface PageDao {
     @Query("SELECT * FROM pages WHERE ownerId = :ownerId AND isSynced = 0")
     suspend fun getUnsyncedPages(ownerId: String): List<PageEntity>
 
+    @Query(
+        """
+        SELECT pages.* FROM pages
+        INNER JOIN books ON books.id = pages.bookId
+        WHERE pages.isSynced = 0
+        AND (books.ownerId = :userId OR books.sharedEditorIds LIKE '%' || :editorToken || '%')
+        """
+    )
+    suspend fun getUnsyncedPagesForAccessibleBooks(userId: String, editorToken: String): List<PageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPages(pages: List<PageEntity>)
 
@@ -77,6 +93,9 @@ interface PageDao {
 
     @Query("UPDATE pages SET syncError = :error WHERE id = :pageId")
     suspend fun markSyncError(pageId: String, error: String)
+
+    @Query("UPDATE pages SET removalSuggestedByIds = :suggestedByIds, isSynced = 0 WHERE id = :pageId")
+    suspend fun updateRemovalSuggestions(pageId: String, suggestedByIds: String)
 
     /** Used by reorder: update position for one page. */
     @Query("UPDATE pages SET position = :position, isSynced = 0 WHERE id = :pageId")

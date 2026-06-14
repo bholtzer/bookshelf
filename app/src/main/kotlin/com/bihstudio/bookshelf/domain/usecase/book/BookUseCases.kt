@@ -81,6 +81,17 @@ class SetBookCoverUseCase @Inject constructor(
     }
 }
 
+class ShareBookWithEditorUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(
+        bookId: String,
+        ownerId: String,
+        editorUserId: String,
+    ): AppResult<Book> =
+        bookRepository.shareBookWithEditor(bookId, ownerId, editorUserId)
+}
+
 class DeleteBookUseCase @Inject constructor(
     private val bookRepository: BookRepository,
 ) {
