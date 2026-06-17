@@ -55,6 +55,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsEvent
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsParam
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
 import com.bihstudio.bookshelf.domain.usecase.book.GetBookUseCase
@@ -87,6 +90,7 @@ private data class ReaderPage(
 class BookViewerViewModel @Inject constructor(
     private val getBook: GetBookUseCase,
     private val observePages: ObservePagesUseCase,
+    private val analytics: AnalyticsLogger,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BookViewerUiState())
@@ -94,14 +98,39 @@ class BookViewerViewModel @Inject constructor(
 
     fun load(bookId: String) {
         viewModelScope.launch {
+            analytics.trackScreen("book_viewer")
+            analytics.track(
+                AnalyticsEvent.BOOK_OPENED,
+                mapOf(
+                    AnalyticsParam.BOOK_ID to bookId,
+                    AnalyticsParam.SOURCE to "viewer_load",
+                ),
+            )
             val book = getBook(bookId)
             if (book != null) {
                 _state.update { it.copy(title = book.title) }
             }
             observePages(bookId).collect { pages ->
+                analytics.track(
+                    AnalyticsEvent.READER_PAGES_LOADED,
+                    mapOf(
+                        AnalyticsParam.BOOK_ID to bookId,
+                        AnalyticsParam.PAGE_COUNT to pages.size,
+                    ),
+                )
                 _state.update { it.copy(pages = pages, isLoading = false) }
             }
         }
+    }
+
+    fun trackPrintStarted(bookId: String, pageCount: Int) {
+        analytics.track(
+            AnalyticsEvent.PRINT_STARTED,
+            mapOf(
+                AnalyticsParam.BOOK_ID to bookId,
+                AnalyticsParam.PAGE_COUNT to pageCount,
+            ),
+        )
     }
 }
 
@@ -135,7 +164,10 @@ fun BookViewerScreen(
                 actions = {
                     IconButton(
                         enabled = state.pages.isNotEmpty(),
-                        onClick = { printBook(context, state.title, state.pages) },
+                        onClick = {
+                            viewModel.trackPrintStarted(bookId, state.pages.size)
+                            printBook(context, state.title, state.pages)
+                        },
                     ) {
                         Icon(Icons.Default.Print, contentDescription = "Print book")
                     }

@@ -17,6 +17,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsEvent
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsParam
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
@@ -30,12 +33,17 @@ import javax.inject.Inject
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
-data class SharedUri(val uri: String, val mimeType: String)
+data class SharedUri(
+    val uri: String,
+    val mimeType: String,
+    val displayName: String = "",
+)
 
 data class ShareUiState(
     val books: List<Book> = emptyList(),
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
+    val isSignedIn: Boolean = true,
     val error: String? = null,
 )
 
@@ -45,6 +53,7 @@ class ShareReceiverViewModel @Inject constructor(
     private val observeBooks: ObserveBooksUseCase,
     private val createBook: CreateBookUseCase,
     private val addPageFromUri: AddPageFromUriUseCase,
+    private val analytics: AnalyticsLogger,
 ) : ViewModel() {
 
     private val _pendingUris = MutableStateFlow<List<SharedUri>>(emptyList())
@@ -62,11 +71,21 @@ class ShareReceiverViewModel @Inject constructor(
                     _state.update { it.copy(books = books, isLoading = false) }
                 }
             }
+        } else {
+            _state.update { it.copy(isSignedIn = false, isLoading = false) }
         }
     }
 
-    fun onUrisReceived(uris: List<String>, mimeType: String) {
-        _pendingUris.value = uris.map { SharedUri(it, mimeType) }
+    fun onUrisReceived(uris: List<SharedUri>) {
+        _pendingUris.value = uris
+        analytics.trackScreen("share_receiver")
+        analytics.track(
+            AnalyticsEvent.SHARE_RECEIVED,
+            mapOf(
+                AnalyticsParam.FILE_COUNT to uris.size,
+                AnalyticsParam.MIME_TYPE to uris.firstOrNull()?.mimeType.orEmpty(),
+            ),
+        )
         _state.update { it.copy(error = null) }
     }
 
@@ -74,9 +93,20 @@ class ShareReceiverViewModel @Inject constructor(
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
+            var failures = 0
             _pendingUris.value.forEach { shared ->
-                addPageFromUri(book.id, user.uid, shared.uri, shared.mimeType)
+                if (addPageFromUri(book.id, user.uid, shared.uri, shared.mimeType) is AppResult.Error) {
+                    failures++
+                }
             }
+            analytics.track(
+                AnalyticsEvent.SHARE_ADD_TO_BOOK_RESULT,
+                mapOf(
+                    AnalyticsParam.BOOK_ID to book.id,
+                    AnalyticsParam.FILE_COUNT to _pendingUris.value.size,
+                    AnalyticsParam.RESULT to if (failures == 0) "success" else "partial_failure",
+                ),
+            )
             _state.update { it.copy(isSaving = false) }
             clearPending()
         }
@@ -87,11 +117,28 @@ class ShareReceiverViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = createBook(user.uid, title, description)) {
-                is AppResult.Error   -> _state.update { it.copy(isSaving = false, error = result.message) }
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.SHARE_CREATE_BOOK_RESULT,
+                        mapOf(AnalyticsParam.RESULT to "failure"),
+                    )
+                    _state.update { it.copy(isSaving = false, error = result.message) }
+                }
                 is AppResult.Success -> {
+                    var failures = 0
                     _pendingUris.value.forEach { shared ->
-                        addPageFromUri(result.data.id, user.uid, shared.uri, shared.mimeType)
+                        if (addPageFromUri(result.data.id, user.uid, shared.uri, shared.mimeType) is AppResult.Error) {
+                            failures++
+                        }
                     }
+                    analytics.track(
+                        AnalyticsEvent.SHARE_CREATE_BOOK_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to result.data.id,
+                            AnalyticsParam.FILE_COUNT to _pendingUris.value.size,
+                            AnalyticsParam.RESULT to if (failures == 0) "success" else "partial_failure",
+                        ),
+                    )
                     _state.update { it.copy(isSaving = false) }
                     clearPending()
                 }
@@ -102,6 +149,16 @@ class ShareReceiverViewModel @Inject constructor(
     fun clearPending() {
         _pendingUris.value = emptyList()
         _state.update { it.copy(error = null) }
+    }
+
+    fun dismissPending() {
+        if (_pendingUris.value.isNotEmpty()) {
+            analytics.track(
+                AnalyticsEvent.SHARE_SHEET_DISMISSED,
+                mapOf(AnalyticsParam.FILE_COUNT to _pendingUris.value.size),
+            )
+        }
+        clearPending()
     }
 }
 
@@ -116,6 +173,9 @@ fun ShareReceiverBottomSheet(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showDialog by remember { mutableStateOf(false) }
+    val recommendedBook = remember(state.books, uris) {
+        state.books.recommendedFor(uris)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -123,8 +183,16 @@ fun ShareReceiverBottomSheet(
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).navigationBarsPadding()) {
             Text(
-                if (uris.size == 1) "Add 1 page to…" else "Add ${uris.size} pages to…",
+                if (uris.size == 1) "Add 1 file to BookShelf" else "Add ${uris.size} files to BookShelf",
                 style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+            Text(
+                uris.toIncomingSummary(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
 
@@ -134,22 +202,49 @@ fun ShareReceiverBottomSheet(
             }
 
             ListItem(
-                headlineContent = { Text("New book…") },
+                headlineContent = { Text("Create new book") },
+                supportingContent = { Text("Save these files as the first pages") },
                 leadingContent  = { Icon(Icons.Default.Add, null) },
-                modifier = Modifier.clickable { showDialog = true },
+                modifier = Modifier.clickable(enabled = state.isSignedIn) { showDialog = true },
             )
             HorizontalDivider()
 
             if (state.isLoading) {
                 Box(Modifier.fillMaxWidth().height(100.dp), Alignment.Center) { CircularProgressIndicator() }
+            } else if (!state.isSignedIn) {
+                Text(
+                    "Sign in to BookShelf first, then open this file again to add it to a book.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp, horizontal = 8.dp),
+                )
             } else if (state.books.isEmpty()) {
                 Text("No books yet. Create your first one above.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 24.dp, horizontal = 8.dp))
             } else {
+                recommendedBook?.let { book ->
+                    Text(
+                        "Recommended",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                    )
+                    ListItem(
+                        headlineContent = { Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = { Text("Best match for the incoming file") },
+                        leadingContent = { Icon(Icons.Default.Book, null) },
+                        modifier = Modifier.clickable(enabled = !state.isSaving) { viewModel.addToExistingBook(book) },
+                    )
+                    HorizontalDivider()
+                }
+                Text(
+                    "Choose a book",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp),
+                )
                 LazyColumn(Modifier.heightIn(max = 360.dp)) {
-                    items(state.books, key = { it.id }) { book ->
+                    items(state.books.filterNot { it.id == recommendedBook?.id }, key = { it.id }) { book ->
                         ListItem(
                             headlineContent   = { Text(book.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             supportingContent = { Text("${book.pageCount} pages", style = MaterialTheme.typography.bodySmall) },
@@ -170,6 +265,37 @@ fun ShareReceiverBottomSheet(
             onDismiss = { showDialog = false },
         )
     }
+}
+
+private fun List<Book>.recommendedFor(uris: List<SharedUri>): Book? {
+    val fileText = uris.joinToString(" ") { it.displayName }.lowercase()
+    if (fileText.isBlank()) return null
+    return maxByOrNull { book ->
+        book.title.lowercase()
+            .split(Regex("\\s+"))
+            .filter { it.length >= 3 }
+            .count { token -> fileText.contains(token) }
+    }?.takeIf { book ->
+        book.title.lowercase()
+            .split(Regex("\\s+"))
+            .any { token -> token.length >= 3 && fileText.contains(token) }
+    }
+}
+
+private fun List<SharedUri>.toIncomingSummary(): String {
+    if (isEmpty()) return "Choose where to save the incoming file."
+    if (size == 1) {
+        val file = first()
+        return file.displayName.ifBlank {
+            if (file.mimeType == "application/pdf") "Incoming PDF file" else "Incoming image file"
+        }
+    }
+    val imageCount = count { it.mimeType.startsWith("image/") }
+    val pdfCount = count { it.mimeType == "application/pdf" }
+    return listOfNotNull(
+        imageCount.takeIf { it > 0 }?.let { "$it image${if (it == 1) "" else "s"}" },
+        pdfCount.takeIf { it > 0 }?.let { "$it PDF${if (it == 1) "" else "s"}" },
+    ).joinToString(", ").ifBlank { "$size files" }
 }
 
 @Composable

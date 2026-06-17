@@ -32,6 +32,8 @@ interface AuthRepository {
         displayName: String,
     ): AppResult<User>
 
+    suspend fun resolveShareTargetToUserId(input: String): AppResult<String>
+
     suspend fun sendPasswordResetEmail(email: String): AppResult<Unit>
 
     suspend fun signOut(): AppResult<Unit>

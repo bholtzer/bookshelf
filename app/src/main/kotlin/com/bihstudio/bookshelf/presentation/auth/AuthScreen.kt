@@ -1,6 +1,7 @@
 package com.bihstudio.bookshelf.presentation.auth
 
 import android.app.Activity
+import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -41,7 +42,8 @@ fun AuthScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context  = LocalContext.current
     val scope    = rememberCoroutineScope()
-    val googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
+    val googleWebClientId = remember(context) { context.googleWebClientId() }
+    var googleSignInError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uiState.isSignedIn) {
         if (uiState.isSignedIn) onAuthSuccess()
@@ -51,9 +53,13 @@ fun AuthScreen(
     val credentialManager = remember { CredentialManager.create(context) }
 
     fun launchGoogleSignIn() {
-        if (googleWebClientId.isBlank()) return
+        if (googleWebClientId.isBlank()) {
+            googleSignInError = "Google sign-in needs a Web OAuth client ID. Add GOOGLE_WEB_CLIENT_ID to local.properties or download an updated google-services.json from Firebase after enabling Google sign-in."
+            return
+        }
         scope.launch {
             try {
+                googleSignInError = null
                 val googleIdOption = GetGoogleIdOption.Builder()
                     .setServerClientId(googleWebClientId)
                     .setFilterByAuthorizedAccounts(false)   // show all accounts, not just previously used
@@ -68,9 +74,13 @@ fun AuthScreen(
                 ) {
                     val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
                     viewModel.onGoogleIdTokenReceived(googleCredential.idToken)
+                } else {
+                    googleSignInError = "Google did not return a usable sign-in credential. Try again with another Google account."
                 }
             } catch (e: GetCredentialException) {
-                // User cancelled or no accounts available — silently ignore
+                googleSignInError = e.localizedMessage ?: "Google sign-in was cancelled or no Google account is available."
+            } catch (e: Exception) {
+                googleSignInError = e.localizedMessage ?: "Google sign-in failed. Please try again."
             }
         }
     }
@@ -176,6 +186,17 @@ fun AuthScreen(
                 }
             }
 
+            AnimatedVisibility(visible = googleSignInError != null) {
+                googleSignInError?.let { error ->
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
             Spacer(Modifier.height(8.dp))
 
             // Primary CTA
@@ -219,7 +240,7 @@ fun AuthScreen(
             OutlinedButton(
                 onClick = ::launchGoogleSignIn,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !uiState.isLoading && googleWebClientId.isNotBlank(),
+                enabled = !uiState.isLoading,
             ) {
                 Text(
                     if (googleWebClientId.isBlank()) {
@@ -241,4 +262,13 @@ fun AuthScreen(
             }
         }
     }
+}
+
+private fun Context.googleWebClientId(): String {
+    if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()) {
+        return BuildConfig.GOOGLE_WEB_CLIENT_ID
+    }
+    val resourceId = resources.getIdentifier("default_web_client_id", "string", packageName)
+    if (resourceId == 0) return ""
+    return runCatching { getString(resourceId) }.getOrDefault("")
 }

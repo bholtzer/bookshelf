@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.BusinessCenter
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -69,10 +70,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsEvent
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsParam
+import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
+import com.bihstudio.bookshelf.domain.usecase.auth.RestoreUserLibraryUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.AcceptBookEditorInviteUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.CreateBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.ObserveBooksUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.ObservePagesByIdsUseCase
@@ -93,7 +100,10 @@ import kotlinx.coroutines.launch
 data class BookShelfUiState(
     val books: List<Book> = emptyList(),
     val coverPages: Map<String, Page> = emptyMap(),
+    val editorShareCode: String? = null,
     val isLoading: Boolean = true,
+    val isJoiningInvite: Boolean = false,
+    val joinInviteError: String? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -103,20 +113,41 @@ class BookShelfViewModel @Inject constructor(
     private val observeBooks: ObserveBooksUseCase,
     private val observePagesByIds: ObservePagesByIdsUseCase,
     private val createBook: CreateBookUseCase,
+    private val acceptBookEditorInvite: AcceptBookEditorInviteUseCase,
+    private val restoreUserLibrary: RestoreUserLibraryUseCase,
+    private val analytics: AnalyticsLogger,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BookShelfUiState())
     val uiState: StateFlow<BookShelfUiState> = _state.asStateFlow()
+    private var lastLoggedBookCount: Int? = null
 
     init {
         val user = getCurrentUser()
         if (user == null) {
+            analytics.trackScreen("bookshelf_signed_out")
             _state.update { it.copy(isLoading = false) }
         } else {
+            analytics.setUserId(user.uid)
+            analytics.trackScreen("bookshelf")
+            viewModelScope.launch {
+                restoreUserLibrary(user.uid)
+            }
             viewModelScope.launch {
                 observeBooks(user.uid)
-                    .flatMapLatest { books -> books.withCoverPages() }
-                    .collect { nextState -> _state.value = nextState }
+                    .flatMapLatest { books -> books.withCoverPages(user.editorShareCode) }
+                    .collect { nextState ->
+                        if (lastLoggedBookCount != nextState.books.size) {
+                            lastLoggedBookCount = nextState.books.size
+                            analytics.track(
+                                AnalyticsEvent.SHELF_LOADED,
+                                mapOf(
+                                    AnalyticsParam.BOOK_COUNT to nextState.books.size,
+                                ),
+                            )
+                        }
+                        _state.value = nextState
+                    }
             }
         }
     }
@@ -124,19 +155,72 @@ class BookShelfViewModel @Inject constructor(
     fun createBook(title: String, description: String) {
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
-            createBook(user.uid, title, description)
+            analytics.track(
+                AnalyticsEvent.BOOK_CREATE_STARTED,
+                mapOf(AnalyticsParam.HAS_DESCRIPTION to description.isNotBlank()),
+            )
+            when (val result = createBook(user.uid, title, description)) {
+                is AppResult.Error -> analytics.track(
+                    AnalyticsEvent.BOOK_CREATE_RESULT,
+                    mapOf(AnalyticsParam.RESULT to "failure"),
+                )
+                is AppResult.Success -> analytics.track(
+                    AnalyticsEvent.BOOK_CREATE_RESULT,
+                    mapOf(
+                        AnalyticsParam.RESULT to "success",
+                        AnalyticsParam.BOOK_ID to result.data.id,
+                        AnalyticsParam.HAS_DESCRIPTION to description.isNotBlank(),
+                    ),
+                )
+            }
         }
     }
 
-    private fun List<Book>.withCoverPages(): Flow<BookShelfUiState> {
+    fun joinSharedBook(inviteText: String, onJoined: (String) -> Unit) {
+        val user = getCurrentUser() ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(isJoiningInvite = true, joinInviteError = null) }
+            when (val result = acceptBookEditorInvite(inviteText, user.uid)) {
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(AnalyticsParam.RESULT to "invite_accept_failure"),
+                    )
+                    _state.update {
+                        it.copy(isJoiningInvite = false, joinInviteError = result.message)
+                    }
+                }
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(
+                            AnalyticsParam.RESULT to "invite_accepted",
+                            AnalyticsParam.BOOK_ID to result.data.id,
+                        ),
+                    )
+                    _state.update { it.copy(isJoiningInvite = false, joinInviteError = null) }
+                    onJoined(result.data.id)
+                }
+            }
+        }
+    }
+
+    private fun List<Book>.withCoverPages(editorShareCode: String): Flow<BookShelfUiState> {
         val coverIds = mapNotNull { it.coverPageId }.distinct()
         if (coverIds.isEmpty()) {
-            return flowOf(BookShelfUiState(books = this, isLoading = false))
+            return flowOf(
+                BookShelfUiState(
+                    books = this,
+                    editorShareCode = editorShareCode,
+                    isLoading = false,
+                )
+            )
         }
         return observePagesByIds(coverIds).map { pages ->
             BookShelfUiState(
                 books = this,
                 coverPages = pages.associateBy { it.id },
+                editorShareCode = editorShareCode,
                 isLoading = false,
             )
         }
@@ -148,10 +232,22 @@ class BookShelfViewModel @Inject constructor(
 fun BookShelfScreen(
     onOpenBook: (String) -> Unit,
     onEditBook: (String) -> Unit,
+    pendingInviteText: String? = null,
+    onInviteConsumed: () -> Unit = {},
     viewModel: BookShelfViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    var initialJoinText by remember { mutableStateOf("") }
+
+    androidx.compose.runtime.LaunchedEffect(pendingInviteText) {
+        if (!pendingInviteText.isNullOrBlank()) {
+            initialJoinText = pendingInviteText
+            showJoinDialog = true
+            onInviteConsumed()
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -173,10 +269,12 @@ fun BookShelfScreen(
                 }
 
                 state.books.isEmpty() -> EmptyShelf(
+                    editorShareCode = state.editorShareCode,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(24.dp),
                     onCreateBook = { showCreateDialog = true },
+                    onJoinBook = { showJoinDialog = true },
                 )
 
                 else -> LazyVerticalGrid(
@@ -186,7 +284,11 @@ fun BookShelfScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                        ShelfHeader(bookCount = state.books.size)
+                        ShelfHeader(
+                            bookCount = state.books.size,
+                            editorShareCode = state.editorShareCode,
+                            onJoinBook = { showJoinDialog = true },
+                        )
                     }
                     items(state.books, key = { it.id }) { book ->
                         BookCard(
@@ -207,6 +309,21 @@ fun BookShelfScreen(
             onConfirm = { title, description ->
                 viewModel.createBook(title, description)
                 showCreateDialog = false
+            },
+        )
+    }
+
+    if (showJoinDialog) {
+        JoinSharedBookDialog(
+            isJoining = state.isJoiningInvite,
+            error = state.joinInviteError,
+            initialText = initialJoinText,
+            onDismiss = { showJoinDialog = false },
+            onConfirm = { inviteText ->
+                viewModel.joinSharedBook(inviteText) {
+                    showJoinDialog = false
+                    onEditBook(it)
+                }
             },
         )
     }
@@ -260,7 +377,11 @@ private fun LibraryBackdrop() {
 }
 
 @Composable
-private fun ShelfHeader(bookCount: Int) {
+private fun ShelfHeader(
+    bookCount: Int,
+    editorShareCode: String?,
+    onJoinBook: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -298,13 +419,29 @@ private fun ShelfHeader(bookCount: Int) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color(0xFFFFE8C7),
                 )
+                editorShareCode?.let { code ->
+                    Text(
+                        "Your editor code: $code",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color(0xFFFFF3E2),
+                    )
+                }
+                TextButton(onClick = onJoinBook) {
+                    Icon(Icons.Default.GroupAdd, contentDescription = null)
+                    Text("Join shared book")
+                }
             }
         }
     }
 }
 
 @Composable
-private fun EmptyShelf(modifier: Modifier = Modifier, onCreateBook: () -> Unit) {
+private fun EmptyShelf(
+    editorShareCode: String?,
+    modifier: Modifier = Modifier,
+    onCreateBook: () -> Unit,
+    onJoinBook: () -> Unit,
+) {
     Box(modifier, contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -335,13 +472,79 @@ private fun EmptyShelf(modifier: Modifier = Modifier, onCreateBook: () -> Unit) 
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            editorShareCode?.let { code ->
+                AssistChip(
+                    onClick = {},
+                    label = { Text("Editor code: $code") },
+                )
+            }
             AssistChip(
                 onClick = onCreateBook,
                 label = { Text("Create book") },
                 leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
             )
+            AssistChip(
+                onClick = onJoinBook,
+                label = { Text("Join shared book") },
+                leadingIcon = { Icon(Icons.Default.GroupAdd, contentDescription = null) },
+            )
         }
     }
+}
+
+@Composable
+private fun JoinSharedBookDialog(
+    isJoining: Boolean,
+    error: String?,
+    initialText: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var inviteText by remember(initialText) { mutableStateOf(initialText) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Join shared book") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Paste the book share code or invite link from the owner. After joining, the book will appear on your shelf and you can add pages.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = inviteText,
+                    onValueChange = { inviteText = it },
+                    label = { Text("Book share code or link") },
+                    placeholder = { Text("BK-ABC123DE4567") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = inviteText.isNotBlank() && !isJoining,
+                onClick = { onConfirm(inviteText.trim()) },
+            ) {
+                if (isJoining) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Join")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

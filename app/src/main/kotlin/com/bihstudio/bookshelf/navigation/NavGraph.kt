@@ -4,6 +4,9 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsEvent
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsParam
 import com.bihstudio.bookshelf.presentation.auth.AuthScreen
 import com.bihstudio.bookshelf.presentation.bookshelf.BookShelfScreen
 import com.bihstudio.bookshelf.presentation.detail.BookDetailScreen
@@ -26,12 +29,19 @@ fun BookshelfNavGraph(
     navController: NavHostController,
     startDestination: String,
     afterOpeningDestination: String,
+    analytics: AnalyticsLogger,
+    pendingBookInvite: String?,
+    onBookInviteConsumed: () -> Unit,
 ) {
     NavHost(navController = navController, startDestination = startDestination) {
 
         composable(Route.OPENING) {
             OpeningScreen(
                 onFinished = {
+                    analytics.track(
+                        AnalyticsEvent.OPENING_FINISHED,
+                        mapOf(AnalyticsParam.SOURCE to afterOpeningDestination),
+                    )
                     navController.navigate(afterOpeningDestination) {
                         popUpTo(Route.OPENING) { inclusive = true }
                     }
@@ -49,8 +59,28 @@ fun BookshelfNavGraph(
 
         composable(Route.BOOKSHELF) {
             BookShelfScreen(
-                onOpenBook = { bookId -> navController.navigate(Route.viewer(bookId)) },
-                onEditBook = { bookId -> navController.navigate(Route.detail(bookId)) },
+                onOpenBook = { bookId ->
+                    analytics.track(
+                        AnalyticsEvent.BOOK_OPENED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.SOURCE to "shelf",
+                        ),
+                    )
+                    navController.navigate(Route.viewer(bookId))
+                },
+                onEditBook = { bookId ->
+                    analytics.track(
+                        AnalyticsEvent.BOOK_EDIT_OPENED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.SOURCE to "shelf",
+                        ),
+                    )
+                    navController.navigate(Route.detail(bookId))
+                },
+                pendingInviteText = pendingBookInvite,
+                onInviteConsumed = onBookInviteConsumed,
             )
         }
 
@@ -59,7 +89,16 @@ fun BookshelfNavGraph(
             BookViewerScreen(
                 bookId = bookId,
                 onBack = { navController.popBackStack() },
-                onEdit = { navController.navigate(Route.detail(bookId)) },
+                onEdit = {
+                    analytics.track(
+                        AnalyticsEvent.BOOK_EDIT_OPENED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.SOURCE to "viewer",
+                        ),
+                    )
+                    navController.navigate(Route.detail(bookId))
+                },
             )
         }
 

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,19 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.google.services)
 }
+
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        localFile.inputStream().use { stream -> load(stream) }
+    }
+}
+
+fun googleWebClientId(): String =
+    providers.gradleProperty("GOOGLE_WEB_CLIENT_ID").orNull
+        ?: localProperties.getProperty("GOOGLE_WEB_CLIENT_ID")
+        ?: System.getenv("GOOGLE_WEB_CLIENT_ID")
+        ?: ""
 
 android {
     namespace = "com.bihstudio.bookshelf"
@@ -17,7 +32,7 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId()}\"")
     }
 
     buildTypes {
@@ -83,6 +98,7 @@ dependencies {
 
     // Firebase
     implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
     implementation(libs.firebase.auth.ktx)
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.firebase.storage.ktx)
@@ -108,4 +124,7 @@ dependencies {
 
     // DataStore
     implementation(libs.datastore.preferences)
+
+    // Google Play deferred invite links
+    implementation(libs.install.referrer)
 }

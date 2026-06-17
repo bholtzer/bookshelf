@@ -2,6 +2,7 @@ package com.bihstudio.bookshelf.domain.usecase.book
 
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
+import com.bihstudio.bookshelf.domain.repository.AuthRepository
 import com.bihstudio.bookshelf.domain.repository.BookRepository
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
@@ -122,13 +123,39 @@ class CreateBookCustomCoverImageUseCase @Inject constructor(
 
 class ShareBookWithEditorUseCase @Inject constructor(
     private val bookRepository: BookRepository,
+    private val authRepository: AuthRepository,
 ) {
     suspend operator fun invoke(
         bookId: String,
         ownerId: String,
-        editorUserId: String,
-    ): AppResult<Book> =
-        bookRepository.shareBookWithEditor(bookId, ownerId, editorUserId)
+        shareTarget: String,
+    ): AppResult<Book> {
+        when (val resolved = authRepository.resolveShareTargetToUserId(shareTarget)) {
+            is AppResult.Error -> return AppResult.Error(resolved.message, resolved.cause)
+            is AppResult.Success -> {
+                if (resolved.data == ownerId) {
+                    return AppResult.Error("You already own this book")
+                }
+                return bookRepository.shareBookWithEditor(bookId, ownerId, resolved.data)
+            }
+        }
+    }
+}
+
+class CreateBookEditorInviteUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String, ownerId: String): AppResult<String> =
+        bookRepository.createBookEditorInvite(bookId, ownerId)
+}
+
+class AcceptBookEditorInviteUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(inviteText: String, editorUserId: String): AppResult<Book> {
+        if (inviteText.isBlank()) return AppResult.Error("Paste an invite link or code")
+        return bookRepository.acceptBookEditorInvite(inviteText, editorUserId)
+    }
 }
 
 class DeleteBookUseCase @Inject constructor(

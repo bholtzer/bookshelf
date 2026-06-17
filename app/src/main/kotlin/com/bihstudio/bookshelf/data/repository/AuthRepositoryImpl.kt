@@ -2,16 +2,20 @@ package com.bihstudio.bookshelf.data.repository
 
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.User
+import com.bihstudio.bookshelf.domain.model.extractEditorShareCode
+import com.bihstudio.bookshelf.domain.model.toEditorShareCode
 import com.bihstudio.bookshelf.domain.repository.AuthRepository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,13 +34,13 @@ class AuthRepositoryImpl @Inject constructor(
     }
 
     override fun getCurrentUserSnapshot(): User? =
-        firebaseAuth.currentUser?.toDomain()
+        firebaseAuth.currentUser?.also(::refreshUserDocument)?.toDomain()
 
     override suspend fun signInWithGoogle(idToken: String): AppResult<User> = runCatching {
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         val result = firebaseAuth.signInWithCredential(credential).await()
         val user = result.user ?: error("Sign-in succeeded but user is null")
-        upsertUserDocument(user)
+        upsertUserDocumentBestEffort(user)
         user.toDomain()
     }.toAppResult()
 
@@ -46,7 +50,7 @@ class AuthRepositoryImpl @Inject constructor(
     ): AppResult<User> = runCatching {
         val result = firebaseAuth.signInWithEmailAndPassword(email, password).await()
         val user = result.user ?: error("Sign-in succeeded but user is null")
-        upsertUserDocument(user)
+        upsertUserDocumentBestEffort(user)
         user.toDomain()
     }.toAppResult()
 
@@ -63,10 +67,30 @@ class AuthRepositoryImpl @Inject constructor(
                 .setDisplayName(displayName)
                 .build()
         ).await()
-        upsertUserDocument(user, overrideName = displayName)
+        upsertUserDocumentBestEffort(user, overrideName = displayName)
         user.reload().await()
         firebaseAuth.currentUser!!.toDomain()
     }.toAppResult()
+
+    override suspend fun resolveShareTargetToUserId(input: String): AppResult<String> =
+        runCatching {
+            val trimmed = input.trim()
+            require(trimmed.isNotBlank()) { "Share code cannot be empty" }
+
+            val shareCode = trimmed.extractEditorShareCode()
+            if (shareCode == null) {
+                return@runCatching trimmed
+            }
+
+            val snapshot = firestore.collection("users")
+                .whereEqualTo("editorShareCode", shareCode)
+                .limit(1)
+                .get()
+                .await()
+            val userId = snapshot.documents.firstOrNull()?.getString("uid")
+                ?: error("No user found for share code $shareCode")
+            userId
+        }.toAppResult()
 
     override suspend fun sendPasswordResetEmail(email: String): AppResult<Unit> =
         runCatching {
@@ -93,12 +117,36 @@ class AuthRepositoryImpl @Inject constructor(
             "displayName" to (overrideName ?: user.displayName),
             "email"       to user.email,
             "photoUrl"    to user.photoUrl?.toString(),
+            "editorShareCode" to user.uid.toEditorShareCode(),
             "lastSeen"    to System.currentTimeMillis(),
         )
         firestore.collection("users")
             .document(user.uid)
-            .set(data)
+            .set(data, SetOptions.merge())
             .await()
+    }
+
+    private suspend fun upsertUserDocumentBestEffort(
+        user: FirebaseUser,
+        overrideName: String? = null,
+    ) {
+        withTimeoutOrNull(4_000) {
+            runCatching { upsertUserDocument(user, overrideName) }
+        }
+    }
+
+    private fun refreshUserDocument(user: FirebaseUser) {
+        val data = mapOf(
+            "uid" to user.uid,
+            "displayName" to user.displayName,
+            "email" to user.email,
+            "photoUrl" to user.photoUrl?.toString(),
+            "editorShareCode" to user.uid.toEditorShareCode(),
+            "lastSeen" to System.currentTimeMillis(),
+        )
+        firestore.collection("users")
+            .document(user.uid)
+            .set(data, SetOptions.merge())
     }
 }
 
@@ -109,6 +157,7 @@ private fun FirebaseUser.toDomain() = User(
     displayName = displayName,
     email = email,
     photoUrl = photoUrl?.toString(),
+    editorShareCode = uid.toEditorShareCode(),
 )
 
 private fun <T> Result<T>.toAppResult(): AppResult<T> =

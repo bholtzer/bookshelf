@@ -1,8 +1,10 @@
 package com.bihstudio.bookshelf.presentation.detail
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.BusinessCenter
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Image
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -51,6 +55,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -69,6 +74,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -76,12 +83,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsEvent
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsParam
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
+import com.bihstudio.bookshelf.domain.model.extractBookInviteCode
+import com.bihstudio.bookshelf.domain.model.toBookInviteIntentLink
+import com.bihstudio.bookshelf.domain.model.toBookInvitePlayStoreLink
+import com.bihstudio.bookshelf.domain.model.toBookInviteCode
+import com.bihstudio.bookshelf.domain.model.toBookInviteLink
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
-import com.bihstudio.bookshelf.domain.usecase.book.CreateBookCustomCoverImageUseCase
+import com.bihstudio.bookshelf.domain.usecase.book.CreateBookEditorInviteUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.DeleteBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.GetBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.RenameBookUseCase
@@ -121,13 +136,14 @@ class BookDetailViewModel @Inject constructor(
     private val setBookCover: SetBookCoverUseCase,
     private val setBookCoverStyle: SetBookCoverStyleUseCase,
     private val setBookCustomCoverFromUri: SetBookCustomCoverFromUriUseCase,
-    private val createBookCustomCoverImage: CreateBookCustomCoverImageUseCase,
     private val shareBookWithEditor: ShareBookWithEditorUseCase,
+    private val createBookEditorInvite: CreateBookEditorInviteUseCase,
     private val deleteBook: DeleteBookUseCase,
     private val observePages: ObservePagesUseCase,
     private val addPageFromUri: AddPageFromUriUseCase,
     private val deletePage: DeletePageUseCase,
     private val recommendPageRemovalUseCase: RecommendPageRemovalUseCase,
+    private val analytics: AnalyticsLogger,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(BookDetailUiState())
@@ -136,7 +152,18 @@ class BookDetailViewModel @Inject constructor(
     fun load(bookId: String) {
         viewModelScope.launch {
             val userId = getCurrentUser()?.uid
-            _state.update { it.copy(book = getBook(bookId), currentUserId = userId) }
+            val book = getBook(bookId)
+            analytics.trackScreen("book_detail")
+            analytics.track(
+                AnalyticsEvent.BOOK_EDIT_OPENED,
+                mapOf(
+                    AnalyticsParam.BOOK_ID to bookId,
+                    AnalyticsParam.CAN_EDIT to (userId != null && book?.canEditPages(userId) == true),
+                    AnalyticsParam.PAGE_COUNT to (book?.pageCount ?: 0),
+                    AnalyticsParam.SOURCE to "detail_load",
+                ),
+            )
+            _state.update { it.copy(book = book, currentUserId = userId) }
             observePages(bookId).collect { pages ->
                 _state.update { it.copy(pages = pages, isLoading = false) }
             }
@@ -148,11 +175,30 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = renameBook(book.id, title, description)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.BOOK_UPDATED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to book.id,
+                            AnalyticsParam.RESULT to "failure",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, error = result.message)
+                    }
                 }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.BOOK_UPDATED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to book.id,
+                            AnalyticsParam.RESULT to "success",
+                            AnalyticsParam.HAS_DESCRIPTION to description.isNotBlank(),
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, book = result.data)
+                    }
                 }
             }
         }
@@ -166,7 +212,15 @@ class BookDetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
+            analytics.track(
+                AnalyticsEvent.PAGES_ADD_STARTED,
+                mapOf(
+                    AnalyticsParam.BOOK_ID to bookId,
+                    AnalyticsParam.FILE_COUNT to files.size,
+                ),
+            )
             _state.update { it.copy(isSaving = true, error = null) }
+            var failures = 0
             for (file in files) {
                 val result = addPageFromUri(
                     bookId = bookId,
@@ -176,9 +230,18 @@ class BookDetailViewModel @Inject constructor(
                     originalFileName = file.displayName,
                 )
                 if (result is AppResult.Error) {
+                    failures++
                     _state.update { it.copy(error = result.message) }
                 }
             }
+            analytics.track(
+                AnalyticsEvent.PAGES_ADD_RESULT,
+                mapOf(
+                    AnalyticsParam.BOOK_ID to bookId,
+                    AnalyticsParam.FILE_COUNT to files.size,
+                    AnalyticsParam.RESULT to if (failures == 0) "success" else "partial_failure",
+                ),
+            )
             _state.update { it.copy(isSaving = false) }
         }
     }
@@ -187,8 +250,17 @@ class BookDetailViewModel @Inject constructor(
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
             when (val result = deletePage.invoke(pageId, user.uid)) {
-                is AppResult.Error -> _state.update { it.copy(error = result.message) }
-                is AppResult.Success -> Unit
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.PAGE_DELETE_RESULT,
+                        mapOf(AnalyticsParam.RESULT to "failure"),
+                    )
+                    _state.update { it.copy(error = result.message) }
+                }
+                is AppResult.Success -> analytics.track(
+                    AnalyticsEvent.PAGE_DELETE_RESULT,
+                    mapOf(AnalyticsParam.RESULT to "success"),
+                )
             }
         }
     }
@@ -197,8 +269,17 @@ class BookDetailViewModel @Inject constructor(
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
             when (val result = recommendPageRemovalUseCase(pageId, user.uid)) {
-                is AppResult.Error -> _state.update { it.copy(error = result.message) }
-                is AppResult.Success -> Unit
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.PAGE_REMOVE_RECOMMEND_RESULT,
+                        mapOf(AnalyticsParam.RESULT to "failure"),
+                    )
+                    _state.update { it.copy(error = result.message) }
+                }
+                is AppResult.Success -> analytics.track(
+                    AnalyticsEvent.PAGE_REMOVE_RECOMMEND_RESULT,
+                    mapOf(AnalyticsParam.RESULT to "success"),
+                )
             }
         }
     }
@@ -212,11 +293,31 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = setBookCover(bookId, pageId)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_STYLE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "failure",
+                            AnalyticsParam.STYLE to "page",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, error = result.message)
+                    }
                 }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_STYLE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "success",
+                            AnalyticsParam.STYLE to if (pageId == null) "generated" else "page",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, book = result.data)
+                    }
                 }
             }
         }
@@ -231,11 +332,31 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = setBookCoverStyle(bookId, style)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_STYLE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "failure",
+                            AnalyticsParam.STYLE to (style ?: "automatic"),
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, error = result.message)
+                    }
                 }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_STYLE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "success",
+                            AnalyticsParam.STYLE to (style ?: "automatic"),
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, book = result.data)
+                    }
                 }
             }
         }
@@ -250,30 +371,29 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = setBookCustomCoverFromUri(bookId, sourceUri)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_PHOTO_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "failure",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, error = result.message)
+                    }
                 }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
-                }
-            }
-        }
-    }
-
-    fun createCustomCoverImage(prompt: String) {
-        val bookId = _state.value.book?.id ?: return
-        if (!_state.value.canEditPages) {
-            _state.update { it.copy(error = "This book was not shared with permission to edit pages") }
-            return
-        }
-        viewModelScope.launch {
-            _state.update { it.copy(isSaving = true, error = null) }
-            when (val result = createBookCustomCoverImage(bookId, prompt)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
-                }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.COVER_PHOTO_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "success",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, book = result.data)
+                    }
                 }
             }
         }
@@ -285,11 +405,60 @@ class BookDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isSaving = true, error = null) }
             when (val result = shareBookWithEditor(bookId, userId, editorUserId)) {
-                is AppResult.Error -> _state.update {
-                    it.copy(isSaving = false, error = result.message)
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "failure",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, error = result.message)
+                    }
                 }
-                is AppResult.Success -> _state.update {
-                    it.copy(isSaving = false, book = result.data)
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "success",
+                        ),
+                    )
+                    _state.update {
+                        it.copy(isSaving = false, book = result.data)
+                    }
+                }
+            }
+        }
+    }
+
+    fun createEditorInvite(onInviteReady: (String, String) -> Unit) {
+        val userId = getCurrentUser()?.uid ?: return
+        val book = _state.value.book ?: return
+        val code = "${book.ownerId}:${book.id}".toBookInviteCode()
+        onInviteReady(book.title, code.toBookInviteLink(book.ownerId, book.id))
+        viewModelScope.launch {
+            when (val result = createBookEditorInvite(book.id, userId)) {
+                is AppResult.Error -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to book.id,
+                            AnalyticsParam.RESULT to "invite_failure",
+                        ),
+                    )
+                    _state.update { it.copy(error = result.message) }
+                }
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.EDITOR_SHARE_RESULT,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to book.id,
+                            AnalyticsParam.RESULT to "invite_created",
+                        ),
+                    )
+                    _state.update { it.copy(error = null) }
                 }
             }
         }
@@ -304,8 +473,25 @@ class BookDetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            deleteBook(bookId)
-            onDeleted()
+            when (deleteBook(bookId)) {
+                is AppResult.Error -> analytics.track(
+                    AnalyticsEvent.BOOK_DELETED,
+                    mapOf(
+                        AnalyticsParam.BOOK_ID to bookId,
+                        AnalyticsParam.RESULT to "failure",
+                    ),
+                )
+                is AppResult.Success -> {
+                    analytics.track(
+                        AnalyticsEvent.BOOK_DELETED,
+                        mapOf(
+                            AnalyticsParam.BOOK_ID to bookId,
+                            AnalyticsParam.RESULT to "success",
+                        ),
+                    )
+                    onDeleted()
+                }
+            }
         }
     }
 }
@@ -325,9 +511,9 @@ fun BookDetailScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
-    var showCreateCoverDialog by remember { mutableStateOf(false) }
     var title by remember(state.book?.id) { mutableStateOf(state.book?.title.orEmpty()) }
     var description by remember(state.book?.id) { mutableStateOf(state.book?.description.orEmpty()) }
     val filePicker = rememberLauncherForActivityResult(
@@ -430,6 +616,19 @@ fun BookDetailScreen(
                             currentUserId = state.currentUserId,
                             canEditPages = state.canEditPages,
                             onAddEditor = { showShareDialog = true },
+                            onShareInvite = {
+                                viewModel.createEditorInvite { title, inviteLink ->
+                                    context.shareBookInvite(title, inviteLink)
+                                }
+                            },
+                            onCopyInviteCode = {
+                                viewModel.createEditorInvite { _, inviteLink ->
+                                    val code = inviteLink.extractBookInviteCode().orEmpty()
+                                    clipboardManager.setText(AnnotatedString(code))
+                                    context.showToast("Book share code copied")
+                                }
+                            },
+                            isSaving = state.isSaving,
                         )
                     }
                 }
@@ -443,7 +642,6 @@ fun BookDetailScreen(
                             onClearCover = { viewModel.setCover(null) },
                             onSetGeneratedStyle = { style -> viewModel.setGeneratedCoverStyle(style) },
                             onChoosePhoto = { coverPhotoPicker.launch(arrayOf("image/*")) },
-                            onCreateImage = { showCreateCoverDialog = true },
                         )
                     }
                 }
@@ -503,23 +701,13 @@ fun BookDetailScreen(
             isSaving = state.isSaving,
             existingEditorIds = state.book?.sharedEditorIds.orEmpty(),
             onDismiss = { showShareDialog = false },
-            onConfirm = { editorUserId ->
-                viewModel.shareWithEditor(editorUserId)
+            onConfirm = { shareTarget ->
+                viewModel.shareWithEditor(shareTarget)
                 showShareDialog = false
             },
         )
     }
 
-    if (showCreateCoverDialog) {
-        CreateCoverImageDialog(
-            isSaving = state.isSaving,
-            onDismiss = { showCreateCoverDialog = false },
-            onConfirm = { prompt ->
-                viewModel.createCustomCoverImage(prompt)
-                showCreateCoverDialog = false
-            },
-        )
-    }
 }
 
 @Composable
@@ -528,73 +716,156 @@ private fun SharingPermissionsCard(
     currentUserId: String?,
     canEditPages: Boolean,
     onAddEditor: () -> Unit,
+    onShareInvite: () -> Unit,
+    onCopyInviteCode: () -> Unit,
+    isSaving: Boolean,
 ) {
     val isOwner = currentUserId == book.ownerId
+    val roleLabel = when {
+        isOwner -> "Owner"
+        canEditPages -> "Editor"
+        else -> "View only"
+    }
+    val permissionText = when {
+        isOwner -> "Create a private invite for this book and send it with any messaging app."
+        canEditPages -> "Shared with you. You can add and remove pages in this book."
+        else -> "Only the owner or invited editors can change pages."
+    }
+    val shareCode = remember(book.ownerId, book.id) {
+        "${book.ownerId}:${book.id}".toBookInviteCode()
+    }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.Default.PersonAdd,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.PersonAdd,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
                 Column(Modifier.weight(1f)) {
                     Text("Sharing & permissions", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (canEditPages) {
-                            "You can add and remove pages in this book."
-                        } else {
-                            "View only. Only the owner or invited editors can change pages."
-                        },
+                        permissionText,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
-            Text(
-                "Owner: ${book.ownerId}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                "${book.sharedEditorIds.size} editor${if (book.sharedEditorIds.size == 1) "" else "s"} invited",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (book.sharedEditorIds.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    book.sharedEditorIds.forEach { editorId ->
-                        Text(
-                            "Editor: $editorId",
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PermissionPill(roleLabel)
+                PermissionPill(
+                    "${book.sharedEditorIds.size} editor${if (book.sharedEditorIds.size == 1) "" else "s"}",
+                )
             }
 
             if (isOwner) {
-                Button(
-                    enabled = true,
-                    onClick = onAddEditor,
+                HorizontalDivider()
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Invite editors",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "This code belongs only to this book. Send the link, or copy the code if the other user wants to join from the shelf screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                        .padding(12.dp),
                 ) {
-                    Icon(Icons.Default.PersonAdd, contentDescription = null)
-                    Text("Add editor")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Book share code",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                shareCode,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        OutlinedButton(
+                            enabled = !isSaving,
+                            onClick = onCopyInviteCode,
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null)
+                            Text("Copy")
+                        }
+                    }
+                }
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving,
+                        onClick = onShareInvite,
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                        Text("Send share link")
+                    }
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving,
+                        onClick = onAddEditor,
+                    ) {
+                        Icon(Icons.Default.PersonAdd, contentDescription = null)
+                        Text("Add someone by user code")
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PermissionPill(label: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -605,7 +876,7 @@ private fun ShareEditorDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var editorUserId by remember { mutableStateOf("") }
+    var shareTarget by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -618,15 +889,16 @@ private fun ShareEditorDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Enter the other user's account ID. They must have this app installed and be signed in.",
+                    "Paste the other user's editor code or shared link. Raw account IDs still work.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
-                    value = editorUserId,
-                    onValueChange = { editorUserId = it },
-                    label = { Text("Other user's account ID") },
-                    supportingText = { Text("This is the Firebase uid for their account.") },
+                    value = shareTarget,
+                    onValueChange = { shareTarget = it },
+                    label = { Text("Editor code or link") },
+                    placeholder = { Text("BS-ABC123DE45") },
+                    supportingText = { Text("Example link: bookshelf://editor/BS-ABC123DE45") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -641,8 +913,8 @@ private fun ShareEditorDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = editorUserId.isNotBlank() && !isSaving,
-                onClick = { onConfirm(editorUserId.trim()) },
+                enabled = shareTarget.isNotBlank() && !isSaving,
+                onClick = { onConfirm(shareTarget.trim()) },
             ) { Text("Add editor") }
         },
         dismissButton = {
@@ -659,80 +931,123 @@ private fun CoverPickerPreview(
     onClearCover: () -> Unit,
     onSetGeneratedStyle: (String?) -> Unit,
     onChoosePhoto: () -> Unit,
-    onCreateImage: () -> Unit,
 ) {
     val coverPage = pages.firstOrNull { it.id == book.coverPageId }
+    val hasCustomPhoto = book.customCoverUri != null || book.customCoverRemoteUrl != null
+    val coverSource = when {
+        hasCustomPhoto -> book.customCoverPrompt?.let { "Custom image: $it" } ?: "Photo cover"
+        coverPage != null -> coverPage.originalFileName.ifBlank { "Page cover" }
+        book.coverStyle == null -> "Automatic generated cover"
+        else -> "${CoverTopic.resolve(book.coverStyle, book.title, book.description).label} generated cover"
+    }
+
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CoverThumbnail(
-                    title = book.title,
-                    description = book.description,
-                    style = book.coverStyle,
-                    customCoverUri = book.customCoverUri,
-                    customCoverRemoteUrl = book.customCoverRemoteUrl,
-                    page = coverPage,
-                    modifier = Modifier.size(width = 84.dp, height = 116.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.tertiaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text("Book cover", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (book.customCoverUri != null || book.customCoverRemoteUrl != null) {
-                            book.customCoverPrompt?.let { "Created image: $it" } ?: "Custom photo cover"
-                        } else coverPage?.originalFileName?.ifBlank { "Selected page" }
-                            ?: if (book.coverStyle == null) "Automatic generated cover" else "Custom generated cover",
+                        "Choose the image and style shown on the shelf.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
-                    if (book.coverPageId != null) {
-                        TextButton(
-                            enabled = canEditPages,
-                            onClick = onClearCover,
-                        ) { Text("Use generated cover") }
-                    }
-                    if (!canEditPages) {
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(12.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CoverThumbnail(
+                        title = book.title,
+                        description = book.description,
+                        style = book.coverStyle,
+                        customCoverUri = book.customCoverUri,
+                        customCoverRemoteUrl = book.customCoverRemoteUrl,
+                        page = coverPage,
+                        modifier = Modifier.size(width = 104.dp, height = 144.dp),
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Text(
-                            "View only. Ask the owner to share edit access.",
-                            style = MaterialTheme.typography.bodySmall,
+                            "Current cover",
+                            style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        Text(
+                            coverSource,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = canEditPages,
+                            onClick = onChoosePhoto,
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = null)
+                            Text("Choose photo")
+                        }
+                        if (book.coverPageId != null) {
+                            OutlinedButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = canEditPages,
+                                onClick = onClearCover,
+                            ) {
+                                Icon(Icons.Default.AutoStories, contentDescription = null)
+                                Text("Use generated")
+                            }
+                        }
+                        if (!canEditPages) {
+                            Text(
+                                "View only. Ask the owner to share edit access.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
 
-            Text("Make your own cover", style = MaterialTheme.typography.labelLarge)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(
-                    enabled = canEditPages,
-                    onClick = onChoosePhoto,
-                ) {
-                    Icon(Icons.Default.Image, contentDescription = null)
-                    Text("Photo")
-                }
-                Button(
-                    enabled = canEditPages,
-                    onClick = onCreateImage,
-                ) {
-                    Icon(Icons.Default.Brush, contentDescription = null)
-                    Text("Create")
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Generated style", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "Pick a visual style for generated covers.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-
-            Text("Generated cover style", style = MaterialTheme.typography.labelLarge)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -741,6 +1056,7 @@ private fun CoverPickerPreview(
             ) {
                 CoverStyleChip(
                     label = "Automatic",
+                    icon = Icons.Default.AutoStories,
                     selected = book.coverPageId == null && book.coverStyle == null,
                     enabled = canEditPages,
                     onClick = { onSetGeneratedStyle(null) },
@@ -748,6 +1064,7 @@ private fun CoverPickerPreview(
                 CoverTopic.manualStyles.forEach { topic ->
                     CoverStyleChip(
                         label = topic.label,
+                        icon = topic.icon,
                         selected = book.coverPageId == null && book.coverStyle == topic.name,
                         enabled = canEditPages,
                         onClick = { onSetGeneratedStyle(topic.name) },
@@ -761,55 +1078,22 @@ private fun CoverPickerPreview(
 @Composable
 private fun CoverStyleChip(
     label: String,
+    icon: ImageVector,
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
     if (selected) {
-        Button(enabled = enabled, onClick = onClick) { Text(label) }
+        Button(enabled = enabled, onClick = onClick) {
+            Icon(icon, contentDescription = null)
+            Text(label)
+        }
     } else {
-        TextButton(enabled = enabled, onClick = onClick) { Text(label) }
+        TextButton(enabled = enabled, onClick = onClick) {
+            Icon(icon, contentDescription = null)
+            Text(label)
+        }
     }
-}
-
-@Composable
-private fun CreateCoverImageDialog(
-    isSaving: Boolean,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var prompt by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Create cover image") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    "Describe the cover you want. The app will create a styled cover image from your prompt.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = prompt,
-                    onValueChange = { prompt = it },
-                    label = { Text("Cover idea") },
-                    placeholder = { Text("Example: cozy cooking notebook with warm colors") },
-                    minLines = 3,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = prompt.isNotBlank() && !isSaving,
-                onClick = { onConfirm(prompt.trim()) },
-            ) { Text("Create") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
 }
 
 @Composable
@@ -1050,4 +1334,35 @@ private fun Context.toPickedFile(uri: Uri): PickedFile? {
         if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
     }.orEmpty()
     return PickedFile(uri = uri.toString(), mimeType = mimeType, displayName = displayName)
+}
+
+private fun Context.shareBookInvite(title: String, inviteLink: String) {
+    val code = inviteLink.extractBookInviteCode().orEmpty()
+    val openLink = inviteLink.toBookInviteIntentLink(packageName)
+    val installLink = code.toBookInvitePlayStoreLink(packageName, inviteLink)
+    val text = """
+        I shared a BookShelf book with you:
+        ${title.ifBlank { "Shared book" }}
+
+        Open in BookShelf:
+        $openLink
+
+        Share code: $code
+
+        If the link does not open, install BookShelf here:
+        $installLink
+
+        After installing, open BookShelf and tap "Join shared book". Paste the share code if needed.
+    """.trimIndent()
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "BookShelf invite")
+        putExtra(Intent.EXTRA_TITLE, "BookShelf invite")
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    startActivity(Intent.createChooser(intent, "Send book invite"))
+}
+
+private fun Context.showToast(message: String) {
+    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

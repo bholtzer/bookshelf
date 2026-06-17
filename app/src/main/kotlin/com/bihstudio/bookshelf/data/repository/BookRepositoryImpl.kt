@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import com.bihstudio.bookshelf.data.local.db.BookDao
 import com.bihstudio.bookshelf.data.local.model.BookEntity
@@ -15,9 +17,14 @@ import com.bihstudio.bookshelf.data.local.model.toDomain
 import com.bihstudio.bookshelf.data.remote.SyncWorker
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
+import com.bihstudio.bookshelf.domain.model.extractBookInviteCode
+import com.bihstudio.bookshelf.domain.model.extractBookInviteTarget
+import com.bihstudio.bookshelf.domain.model.toBookInviteCode
+import com.bihstudio.bookshelf.domain.model.toBookInviteWebLink
 import com.bihstudio.bookshelf.domain.repository.BookRepository
 import com.bihstudio.bookshelf.domain.repository.PageRepository
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -112,6 +119,87 @@ class BookRepositoryImpl @Inject constructor(
         )
         bookDao.updateBook(updated.toEntity())
         SyncWorker.enqueueImmediateSync(context)
+
+        // Make user-code sharing visible to the other user immediately, instead of
+        // waiting for WorkManager to eventually upload the updated permission list.
+        runCatching { pageRepository.uploadPendingPages(ownerId) }
+        val synced = updated.copy(isSynced = true)
+        booksCollection(ownerId)
+            .document(bookId)
+            .set(synced.toEntity().toFirestoreMap(), SetOptions.merge())
+            .await()
+        bookDao.updateBook(synced.toEntity())
+        synced
+    }.toAppResult()
+
+    override suspend fun createBookEditorInvite(bookId: String, ownerId: String): AppResult<String> = runCatching {
+        val book = bookDao.getBook(bookId)?.toDomain() ?: error("Book not found")
+        require(book.ownerId == ownerId) { "Only the book owner can create a share link" }
+
+        val code = "$ownerId:$bookId".toBookInviteCode()
+        booksCollection(ownerId)
+            .document(bookId)
+            .set(book.copy(isSynced = true).toEntity().toFirestoreMap(), SetOptions.merge())
+            .await()
+        firestore.collection("bookInvites")
+            .document(code)
+            .set(
+                mapOf(
+                    "code" to code,
+                    "ownerId" to ownerId,
+                    "bookId" to bookId,
+                    "title" to book.title,
+                    "permission" to "editor",
+                    "updatedAt" to System.currentTimeMillis(),
+                ),
+                SetOptions.merge(),
+            )
+            .await()
+        code.toBookInviteWebLink(ownerId, bookId)
+    }.toAppResult()
+
+    override suspend fun acceptBookEditorInvite(
+        inviteText: String,
+        editorUserId: String,
+    ): AppResult<Book> = runCatching {
+        require(context.hasNetworkConnection()) {
+            "You are offline. Connect to the internet and try joining the shared book again."
+        }
+        val code = inviteText.extractBookInviteCode()
+            ?: error("Paste a valid BookShelf invite link or code")
+        val target = inviteText.extractBookInviteTarget()
+        val ownerId: String
+        val bookId: String
+        if (target != null) {
+            ownerId = target.ownerId
+            bookId = target.bookId
+        } else {
+            val invite = firestore.collection("bookInvites")
+                .document(code)
+                .get()
+                .await()
+            require(invite.exists()) { "This invite link was not found" }
+            ownerId = invite.getString("ownerId") ?: error("Invite is missing an owner")
+            bookId = invite.getString("bookId") ?: error("Invite is missing a book")
+        }
+        require(ownerId != editorUserId) { "You already own this book" }
+
+        val bookDoc = booksCollection(ownerId)
+            .document(bookId)
+            .get()
+            .await()
+        val book = bookDoc.toBook(ownerId) ?: error("Shared book was not found")
+        val updated = book.copy(
+            sharedEditorIds = (book.sharedEditorIds + editorUserId).distinct(),
+            updatedAt = Instant.now(),
+            isSynced = true,
+        )
+        booksCollection(ownerId)
+            .document(bookId)
+            .set(updated.toEntity().toFirestoreMap(), SetOptions.merge())
+            .await()
+        bookDao.insertBook(updated.toEntity())
+        pageRepository.syncFromRemote(ownerId, bookId)
         updated
     }.toAppResult()
 
@@ -274,10 +362,28 @@ class BookRepositoryImpl @Inject constructor(
 private fun <T> Result<T>.toAppResult(): AppResult<T> =
     fold(
         onSuccess = { AppResult.Success(it) },
-        onFailure = { AppResult.Error(it.message ?: "Unknown error", it) },
+        onFailure = { error ->
+            AppResult.Error(error.toUserMessage(), error)
+        },
     )
 
+private fun Throwable.toUserMessage(): String =
+    if (this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.UNAVAILABLE) {
+        "You are offline. Connect to the internet and try joining the shared book again."
+    } else {
+        message ?: "Unknown error"
+    }
+
 private fun String.toEditorToken(): String = "|$this|"
+
+private fun Context.hasNetworkConnection(): Boolean {
+    val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return false
+    val network = connectivityManager.activeNetwork ?: return false
+    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+}
 
 private fun String.toEditorIdList(): List<String> =
     split("|").filter { it.isNotBlank() }

@@ -4,10 +4,13 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.bihstudio.bookshelf.data.analytics.FirebaseAnalyticsLogger
 import com.bihstudio.bookshelf.data.local.db.*
 import com.bihstudio.bookshelf.data.repository.*
+import com.bihstudio.bookshelf.domain.analytics.AnalyticsLogger
 import com.bihstudio.bookshelf.domain.repository.*
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
 import dagger.Binds
@@ -62,6 +65,8 @@ object DatabaseModule {
 @InstallIn(SingletonComponent::class)
 object FirebaseModule {
     @Provides @Singleton fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance()
+    @Provides @Singleton fun provideFirebaseAnalytics(@ApplicationContext ctx: Context): FirebaseAnalytics =
+        FirebaseAnalytics.getInstance(ctx)
     @Provides @Singleton fun provideFirestore(): FirebaseFirestore = FirebaseFirestore.getInstance()
     @Provides @Singleton fun provideStorage(): FirebaseStorage = FirebaseStorage.getInstance()
 }
@@ -69,6 +74,7 @@ object FirebaseModule {
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
+    @Binds @Singleton abstract fun bindAnalyticsLogger(impl: FirebaseAnalyticsLogger): AnalyticsLogger
     @Binds @Singleton abstract fun bindAuthRepository(impl: AuthRepositoryImpl): AuthRepository
     @Binds @Singleton abstract fun bindBookRepository(impl: BookRepositoryImpl): BookRepository
     @Binds @Singleton abstract fun bindPageRepository(impl: PageRepositoryImpl): PageRepository

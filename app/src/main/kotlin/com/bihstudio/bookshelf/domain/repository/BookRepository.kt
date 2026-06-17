@@ -22,6 +22,10 @@ interface BookRepository {
 
     suspend fun shareBookWithEditor(bookId: String, ownerId: String, editorUserId: String): AppResult<Book>
 
+    suspend fun createBookEditorInvite(bookId: String, ownerId: String): AppResult<String>
+
+    suspend fun acceptBookEditorInvite(inviteText: String, editorUserId: String): AppResult<Book>
+
     suspend fun deleteBook(bookId: String): AppResult<Unit>
 
     /**
