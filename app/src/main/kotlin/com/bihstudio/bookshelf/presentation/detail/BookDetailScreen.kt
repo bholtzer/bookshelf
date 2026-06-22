@@ -91,10 +91,8 @@ import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.model.Page
 import com.bihstudio.bookshelf.domain.model.PageType
 import com.bihstudio.bookshelf.domain.model.extractBookInviteCode
-import com.bihstudio.bookshelf.domain.model.toBookInviteIntentLink
 import com.bihstudio.bookshelf.domain.model.toBookInvitePlayStoreLink
 import com.bihstudio.bookshelf.domain.model.toBookInviteCode
-import com.bihstudio.bookshelf.domain.model.toBookInviteLink
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.CreateBookEditorInviteUseCase
 import com.bihstudio.bookshelf.domain.usecase.book.DeleteBookUseCase
@@ -122,6 +120,7 @@ data class BookDetailUiState(
     val currentUserId: String? = null,
     val isLoading: Boolean = true,
     val isSaving: Boolean = false,
+    val isCreatingInvite: Boolean = false,
     val error: String? = null,
 ) {
     val canEditPages: Boolean
@@ -433,11 +432,20 @@ class BookDetailViewModel @Inject constructor(
         }
     }
 
-    fun createEditorInvite(onInviteReady: (String, String) -> Unit) {
-        val userId = getCurrentUser()?.uid ?: return
-        val book = _state.value.book ?: return
-        val code = "${book.ownerId}:${book.id}".toBookInviteCode()
-        onInviteReady(book.title, code.toBookInviteLink(book.ownerId, book.id))
+    fun createEditorInvite(
+        onInviteReady: (String, String) -> Unit,
+        onError: (String) -> Unit = {},
+    ) {
+        val userId = getCurrentUser()?.uid
+        val book = _state.value.book
+        if (userId == null || book == null) {
+            val message = "Sign in and reopen the book before sharing"
+            _state.update { it.copy(error = message) }
+            onError(message)
+            return
+        }
+        if (_state.value.isCreatingInvite) return
+        _state.update { it.copy(isCreatingInvite = true, error = null) }
         viewModelScope.launch {
             when (val result = createBookEditorInvite(book.id, userId)) {
                 is AppResult.Error -> {
@@ -448,7 +456,8 @@ class BookDetailViewModel @Inject constructor(
                             AnalyticsParam.RESULT to "invite_failure",
                         ),
                     )
-                    _state.update { it.copy(error = result.message) }
+                    _state.update { it.copy(isCreatingInvite = false, error = result.message) }
+                    onError(result.message)
                 }
                 is AppResult.Success -> {
                     analytics.track(
@@ -458,7 +467,8 @@ class BookDetailViewModel @Inject constructor(
                             AnalyticsParam.RESULT to "invite_created",
                         ),
                     )
-                    _state.update { it.copy(error = null) }
+                    _state.update { it.copy(isCreatingInvite = false, error = null) }
+                    onInviteReady(book.title, result.data)
                 }
             }
         }
@@ -617,18 +627,24 @@ fun BookDetailScreen(
                             canEditPages = state.canEditPages,
                             onAddEditor = { showShareDialog = true },
                             onShareInvite = {
-                                viewModel.createEditorInvite { title, inviteLink ->
-                                    context.shareBookInvite(title, inviteLink)
-                                }
+                                viewModel.createEditorInvite(
+                                    onInviteReady = { title, inviteLink ->
+                                        context.shareBookInvite(title, inviteLink)
+                                    },
+                                    onError = { context.showToast(it) },
+                                )
                             },
                             onCopyInviteCode = {
-                                viewModel.createEditorInvite { _, inviteLink ->
-                                    val code = inviteLink.extractBookInviteCode().orEmpty()
-                                    clipboardManager.setText(AnnotatedString(code))
-                                    context.showToast("Book share code copied")
-                                }
+                                viewModel.createEditorInvite(
+                                    onInviteReady = { _, inviteLink ->
+                                        val code = inviteLink.extractBookInviteCode().orEmpty()
+                                        clipboardManager.setText(AnnotatedString(code))
+                                        context.showToast("Book share code copied")
+                                    },
+                                    onError = { context.showToast(it) },
+                                )
                             },
-                            isSaving = state.isSaving,
+                            isCreatingInvite = state.isCreatingInvite,
                         )
                     }
                 }
@@ -718,8 +734,9 @@ private fun SharingPermissionsCard(
     onAddEditor: () -> Unit,
     onShareInvite: () -> Unit,
     onCopyInviteCode: () -> Unit,
-    isSaving: Boolean,
+    isCreatingInvite: Boolean,
 ) {
+    val isSaving = isCreatingInvite
     val isOwner = currentUserId == book.ownerId
     val roleLabel = when {
         isOwner -> "Owner"
@@ -816,7 +833,7 @@ private fun SharingPermissionsCard(
                             )
                         }
                         OutlinedButton(
-                            enabled = !isSaving,
+                            enabled = !isCreatingInvite,
                             onClick = onCopyInviteCode,
                         ) {
                             Icon(Icons.Default.ContentCopy, contentDescription = null)
@@ -831,15 +848,15 @@ private fun SharingPermissionsCard(
                 ) {
                     Button(
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isSaving,
+                        enabled = !isCreatingInvite,
                         onClick = onShareInvite,
                     ) {
                         Icon(Icons.Default.Share, contentDescription = null)
-                        Text("Send share link")
+                        Text(if (isSaving) "Creating link…" else "Send share link")
                     }
                     TextButton(
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !isSaving,
+                        enabled = !isCreatingInvite,
                         onClick = onAddEditor,
                     ) {
                         Icon(Icons.Default.PersonAdd, contentDescription = null)
@@ -1338,14 +1355,13 @@ private fun Context.toPickedFile(uri: Uri): PickedFile? {
 
 private fun Context.shareBookInvite(title: String, inviteLink: String) {
     val code = inviteLink.extractBookInviteCode().orEmpty()
-    val openLink = inviteLink.toBookInviteIntentLink(packageName)
     val installLink = code.toBookInvitePlayStoreLink(packageName, inviteLink)
     val text = """
         I shared a BookShelf book with you:
         ${title.ifBlank { "Shared book" }}
 
-        Open in BookShelf:
-        $openLink
+        Open the shared book:
+        $inviteLink
 
         Share code: $code
 

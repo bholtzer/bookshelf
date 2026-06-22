@@ -18,19 +18,21 @@ import com.bihstudio.bookshelf.data.remote.SyncWorker
 import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.model.Book
 import com.bihstudio.bookshelf.domain.model.extractBookInviteCode
-import com.bihstudio.bookshelf.domain.model.extractBookInviteTarget
 import com.bihstudio.bookshelf.domain.model.toBookInviteCode
 import com.bihstudio.bookshelf.domain.model.toBookInviteWebLink
 import com.bihstudio.bookshelf.domain.repository.BookRepository
 import com.bihstudio.bookshelf.domain.repository.PageRepository
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.Source
 import com.google.firebase.storage.FirebaseStorage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.time.Instant
 import javax.inject.Inject
@@ -133,17 +135,18 @@ class BookRepositoryImpl @Inject constructor(
     }.toAppResult()
 
     override suspend fun createBookEditorInvite(bookId: String, ownerId: String): AppResult<String> = runCatching {
-        val book = bookDao.getBook(bookId)?.toDomain() ?: error("Book not found")
-        require(book.ownerId == ownerId) { "Only the book owner can create a share link" }
+        withTimeout(15_000) {
+            val book = bookDao.getBook(bookId)?.toDomain() ?: error("Book not found")
+            require(book.ownerId == ownerId) { "Only the book owner can create a share link" }
 
-        val code = "$ownerId:$bookId".toBookInviteCode()
-        booksCollection(ownerId)
-            .document(bookId)
-            .set(book.copy(isSynced = true).toEntity().toFirestoreMap(), SetOptions.merge())
-            .await()
-        firestore.collection("bookInvites")
-            .document(code)
-            .set(
+            val code = "$ownerId:$bookId".toBookInviteCode()
+            firestore.collection("bookInvites")
+                .limit(1)
+                .get(Source.SERVER)
+                .await()
+            val batch = firestore.batch()
+            batch.set(
+                firestore.collection("bookInvites").document(code),
                 mapOf(
                     "code" to code,
                     "ownerId" to ownerId,
@@ -154,8 +157,15 @@ class BookRepositoryImpl @Inject constructor(
                 ),
                 SetOptions.merge(),
             )
-            .await()
-        code.toBookInviteWebLink(ownerId, bookId)
+            batch.set(
+                booksCollection(ownerId).document(bookId),
+                book.copy(isSynced = true).toEntity().toFirestoreMap() +
+                    ("activeInviteCode" to code),
+                SetOptions.merge(),
+            )
+            batch.commit().await()
+            code.toBookInviteWebLink(ownerId, bookId)
+        }
     }.toAppResult()
 
     override suspend fun acceptBookEditorInvite(
@@ -167,40 +177,28 @@ class BookRepositoryImpl @Inject constructor(
         }
         val code = inviteText.extractBookInviteCode()
             ?: error("Paste a valid BookShelf invite link or code")
-        val target = inviteText.extractBookInviteTarget()
-        val ownerId: String
-        val bookId: String
-        if (target != null) {
-            ownerId = target.ownerId
-            bookId = target.bookId
-        } else {
-            val invite = firestore.collection("bookInvites")
-                .document(code)
-                .get()
-                .await()
-            require(invite.exists()) { "This invite link was not found" }
-            ownerId = invite.getString("ownerId") ?: error("Invite is missing an owner")
-            bookId = invite.getString("bookId") ?: error("Invite is missing a book")
-        }
-        require(ownerId != editorUserId) { "You already own this book" }
-
-        val bookDoc = booksCollection(ownerId)
-            .document(bookId)
+        val invite = firestore.collection("bookInvites")
+            .document(code)
             .get()
             .await()
+        require(invite.exists()) { "This invite link was not found or is not ready yet" }
+        val ownerId = invite.getString("ownerId") ?: error("Invite is missing an owner")
+        val bookId = invite.getString("bookId") ?: error("Invite is missing a book")
+        require(ownerId != editorUserId) { "You already own this book" }
+
+        val bookRef = booksCollection(ownerId).document(bookId)
+        bookRef.update(
+            mapOf(
+                "sharedEditorIds" to FieldValue.arrayUnion(editorUserId),
+                "updatedAt" to System.currentTimeMillis(),
+            ),
+        ).await()
+        val bookDoc = bookRef.get().await()
         val book = bookDoc.toBook(ownerId) ?: error("Shared book was not found")
-        val updated = book.copy(
-            sharedEditorIds = (book.sharedEditorIds + editorUserId).distinct(),
-            updatedAt = Instant.now(),
-            isSynced = true,
-        )
-        booksCollection(ownerId)
-            .document(bookId)
-            .set(updated.toEntity().toFirestoreMap(), SetOptions.merge())
-            .await()
-        bookDao.insertBook(updated.toEntity())
+        val acceptedBook = book.copy(isSynced = true)
+        bookDao.insertBook(acceptedBook.toEntity())
         pageRepository.syncFromRemote(ownerId, bookId)
-        updated
+        acceptedBook
     }.toAppResult()
 
     override suspend fun deleteBook(bookId: String): AppResult<Unit> = runCatching {
@@ -368,11 +366,28 @@ private fun <T> Result<T>.toAppResult(): AppResult<T> =
     )
 
 private fun Throwable.toUserMessage(): String =
-    if (this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.UNAVAILABLE) {
-        "You are offline. Connect to the internet and try joining the shared book again."
-    } else {
-        message ?: "Unknown error"
+    when {
+        this is kotlinx.coroutines.TimeoutCancellationException ->
+            "Firebase did not respond. Check emulator DNS/network and Firestore configuration."
+        hasCause<java.net.UnknownHostException>() ->
+            "Cannot reach Firebase because DNS lookup failed. Reconnect Wi-Fi or restart the emulator, then try again."
+        this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.UNAVAILABLE ->
+            "Firebase is temporarily unreachable. Check emulator DNS/network and try again."
+        this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+            "Firebase denied creating the invite. Firestore sharing rules must be configured."
+        this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.NOT_FOUND ->
+            "Cloud Firestore is not enabled for this Firebase project. Create the default Firestore database, then try again."
+        else -> message ?: "Unknown error"
     }
+
+private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
+    var current: Throwable? = this
+    while (current != null) {
+        if (current is T) return true
+        current = current.cause
+    }
+    return false
+}
 
 private fun String.toEditorToken(): String = "|$this|"
 
