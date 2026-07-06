@@ -3,9 +3,11 @@ package com.bihstudio.bookshelf.data.remote
 import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
+import com.bihstudio.bookshelf.domain.model.AppResult
 import com.bihstudio.bookshelf.domain.repository.BookRepository
 import com.bihstudio.bookshelf.domain.repository.PageRepository
 import com.bihstudio.bookshelf.domain.usecase.auth.GetCurrentUserUseCase
+import com.google.firebase.storage.StorageException
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -21,17 +23,27 @@ class SyncWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         val user = getCurrentUser() ?: return Result.success()
-        return try {
-            bookRepository.syncToRemote(user.uid)
-            pageRepository.uploadPendingPages(user.uid)
-            Result.success()
-        } catch (e: Exception) {
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
+        val results = listOf(
+            bookRepository.syncToRemote(user.uid),
+            pageRepository.uploadPendingPages(user.uid),
+        )
+        val errors = results.filterIsInstance<AppResult.Error>()
+        if (errors.isEmpty()) return Result.success()
+
+        val output = workDataOf(
+            KEY_SYNC_ERROR to errors.joinToString(separator = "\n") { it.message },
+        )
+        return when {
+            errors.any { it.cause.isPermanentStorageFailure() } -> Result.failure(output)
+            runAttemptCount < MAX_RETRIES -> Result.retry()
+            else -> Result.failure(output)
         }
     }
 
     companion object {
         const val WORK_NAME = "bookshelf_sync"
+        const val KEY_SYNC_ERROR = "sync_error"
+        private const val MAX_RETRIES = 3
 
         fun enqueuePeriodicSync(context: Context) {
             val request = PeriodicWorkRequestBuilder<SyncWorker>(30, TimeUnit.MINUTES)
@@ -51,4 +63,17 @@ class SyncWorker @AssistedInject constructor(
                 .enqueueUniqueWork("${WORK_NAME}_immediate", ExistingWorkPolicy.REPLACE, request)
         }
     }
+}
+
+private fun Throwable?.isPermanentStorageFailure(): Boolean {
+    var current = this
+    while (current != null) {
+        if (current is StorageException) {
+            return current.httpResultCode == 404 ||
+                current.errorCode == StorageException.ERROR_NOT_AUTHENTICATED ||
+                current.errorCode == StorageException.ERROR_NOT_AUTHORIZED
+        }
+        current = current.cause
+    }
+    return false
 }

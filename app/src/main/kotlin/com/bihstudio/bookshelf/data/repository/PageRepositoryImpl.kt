@@ -15,6 +15,7 @@ import com.bihstudio.bookshelf.domain.repository.PageRepository
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -130,12 +131,15 @@ class PageRepositoryImpl @Inject constructor(
             editorToken = "|$ownerId|",
         )
         var count = 0
+        val failures = mutableListOf<String>()
+        var firstFailure: Throwable? = null
         for (entity in unsynced) {
             try {
                 val bookOwnerId = bookDao.getBook(entity.bookId)?.ownerId ?: entity.ownerId
                 val localFile = entity.localUri?.let { File(it) }
                 if ((entity.remoteUrl == null || entity.remoteUrl.isBlank()) && (localFile == null || !localFile.exists())) {
                     pageDao.markSyncError(entity.id, "Local file missing")
+                    failures += "${entity.originalFileName.ifBlank { entity.id }}: local file missing"
                     continue
                 }
 
@@ -159,8 +163,17 @@ class PageRepositoryImpl @Inject constructor(
                 pageDao.markSynced(entity.id, downloadUrl)
                 count++
             } catch (e: Exception) {
-                pageDao.markSyncError(entity.id, e.message ?: "Upload failed")
+                if (firstFailure == null) firstFailure = e
+                val message = e.toPageSyncMessage()
+                pageDao.markSyncError(entity.id, message)
+                failures += "${entity.originalFileName.ifBlank { entity.id }}: $message"
             }
+        }
+        if (failures.isNotEmpty()) {
+            throw PageUploadBatchException(
+                message = failures.joinToString(prefix = "Page upload failed: ", separator = "; "),
+                cause = firstFailure,
+            )
         }
         count
     }.toAppResult()
@@ -174,7 +187,7 @@ class PageRepositoryImpl @Inject constructor(
         val snapshot = pagesCollection(ownerId, bookId).get().await()
         val pages = snapshot.documents.mapNotNull { doc ->
             doc.toPageEntity(ownerId, bookId)
-        }
+        }.map { entity -> entity.withDownloadedPdf() }
         pageDao.insertPages(pages)
         pages.size
     }.toAppResult()
@@ -231,6 +244,15 @@ class PageRepositoryImpl @Inject constructor(
             syncError = null,
         )
     }
+
+    private suspend fun PageEntity.withDownloadedPdf(): PageEntity {
+        if (pageType != com.bihstudio.bookshelf.domain.model.PageType.PDF.name) return this
+        val url = remoteUrl?.takeIf { it.isNotBlank() } ?: return this
+        val dir = File(context.filesDir, "pages").also { it.mkdirs() }
+        val destination = File(dir, "$id.pdf")
+        storage.getReferenceFromUrl(url).getFile(destination).await()
+        return copy(localUri = destination.absolutePath)
+    }
 }
 
 private fun String.toIdList(): List<String> =
@@ -242,5 +264,32 @@ private fun Any?.toStringList(): List<String> =
 private fun <T> Result<T>.toAppResult(): AppResult<T> =
     fold(
         onSuccess = { AppResult.Success(it) },
-        onFailure = { AppResult.Error(it.message ?: "Unknown error", it) },
+        onFailure = { error -> AppResult.Error(error.toPageSyncMessage(), error) },
     )
+
+private fun Throwable.toPageSyncMessage(): String {
+    val storageError = findCause<StorageException>()
+    return when {
+        storageError?.httpResultCode == 404 ->
+            "Cloud backup is not available: Firebase Storage returned 404. Upgrade the Firebase project to Blaze, then open Storage and create the default bucket."
+        storageError?.errorCode == StorageException.ERROR_NOT_AUTHENTICATED ->
+            "Sign in again before uploading book pages."
+        storageError?.errorCode == StorageException.ERROR_NOT_AUTHORIZED ->
+            "Firebase Storage rules denied access to this book's pages."
+        else -> message ?: "Unknown page synchronization error"
+    }
+}
+
+private class PageUploadBatchException(
+    message: String,
+    cause: Throwable?,
+) : Exception(message, cause)
+
+private inline fun <reified T : Throwable> Throwable.findCause(): T? {
+    var current: Throwable? = this
+    while (current != null) {
+        if (current is T) return current
+        current = current.cause
+    }
+    return null
+}

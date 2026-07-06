@@ -28,6 +28,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -139,6 +140,13 @@ class BookRepositoryImpl @Inject constructor(
             val book = bookDao.getBook(bookId)?.toDomain() ?: error("Book not found")
             require(book.ownerId == ownerId) { "Only the book owner can create a share link" }
 
+            when (val pageUpload = pageRepository.uploadPendingPages(ownerId)) {
+                is AppResult.Error -> error(
+                    "The book pages could not be uploaded: ${pageUpload.message}",
+                )
+                is AppResult.Success -> Unit
+            }
+
             val code = "$ownerId:$bookId".toBookInviteCode()
             firestore.collection("bookInvites")
                 .limit(1)
@@ -197,7 +205,14 @@ class BookRepositoryImpl @Inject constructor(
         val book = bookDoc.toBook(ownerId) ?: error("Shared book was not found")
         val acceptedBook = book.copy(isSynced = true)
         bookDao.insertBook(acceptedBook.toEntity())
-        pageRepository.syncFromRemote(ownerId, bookId)
+        when (val pageSync = pageRepository.syncFromRemote(ownerId, bookId)) {
+            is AppResult.Error -> error(
+                "Book access was granted, but its pages could not be downloaded: ${pageSync.message}",
+            )
+            is AppResult.Success -> check(acceptedBook.pageCount == 0 || pageSync.data > 0) {
+                "The owner has not uploaded this book's pages yet. Ask the owner to create and send a new share link."
+            }
+        }
         acceptedBook
     }.toAppResult()
 
@@ -377,6 +392,12 @@ private fun Throwable.toUserMessage(): String =
             "Firebase denied creating the invite. Firestore sharing rules must be configured."
         this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.NOT_FOUND ->
             "Cloud Firestore is not enabled for this Firebase project. Create the default Firestore database, then try again."
+        findCause<StorageException>()?.httpResultCode == 404 ->
+            "Cloud backup is not available: Firebase Storage returned 404. Upgrade the Firebase project to Blaze, then open Storage and create the default bucket."
+        findCause<StorageException>()?.errorCode == StorageException.ERROR_NOT_AUTHENTICATED ->
+            "Sign in again before uploading this book cover."
+        findCause<StorageException>()?.errorCode == StorageException.ERROR_NOT_AUTHORIZED ->
+            "Firebase Storage rules denied access to this book cover."
         else -> message ?: "Unknown error"
     }
 
@@ -387,6 +408,15 @@ private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
         current = current.cause
     }
     return false
+}
+
+private inline fun <reified T : Throwable> Throwable.findCause(): T? {
+    var current: Throwable? = this
+    while (current != null) {
+        if (current is T) return current
+        current = current.cause
+    }
+    return null
 }
 
 private fun String.toEditorToken(): String = "|$this|"

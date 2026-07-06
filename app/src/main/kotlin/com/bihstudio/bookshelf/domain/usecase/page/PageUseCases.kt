@@ -24,6 +24,17 @@ class ObservePagesByIdsUseCase @Inject constructor(
         pageRepository.observePagesByIds(pageIds)
 }
 
+class SyncBookPagesUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+    private val pageRepository: PageRepository,
+) {
+    suspend operator fun invoke(bookId: String): AppResult<Int> {
+        val book = bookRepository.getBook(bookId)
+            ?: return AppResult.Error("Book not found")
+        return pageRepository.syncFromRemote(book.ownerId, book.id)
+    }
+}
+
 class AddPageFromUriUseCase @Inject constructor(
     private val pageRepository: PageRepository,
     private val bookRepository: BookRepository,
