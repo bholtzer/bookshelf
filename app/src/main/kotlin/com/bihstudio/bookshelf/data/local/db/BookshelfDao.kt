@@ -66,6 +66,9 @@ interface PageDao {
     @Query("SELECT * FROM pages WHERE id IN (:pageIds)")
     fun observePagesByIds(pageIds: List<String>): Flow<List<PageEntity>>
 
+    @Query("SELECT * FROM pages WHERE bookId IN (:bookIds) ORDER BY bookId ASC, position ASC, createdAt ASC")
+    fun observePagesForBooks(bookIds: List<String>): Flow<List<PageEntity>>
+
     @Query("SELECT * FROM pages WHERE id = :pageId LIMIT 1")
     suspend fun getPage(pageId: String): PageEntity?
 
@@ -80,6 +83,12 @@ interface PageDao {
 
     @Query("DELETE FROM pages WHERE id = :pageId")
     suspend fun deletePage(pageId: String)
+
+    @Query("DELETE FROM pages WHERE bookId = :bookId AND isSynced = 1 AND id NOT IN (:remotePageIds)")
+    suspend fun deleteSyncedPagesNotIn(bookId: String, remotePageIds: List<String>)
+
+    @Query("DELETE FROM pages WHERE bookId = :bookId AND isSynced = 1")
+    suspend fun deleteAllSyncedPagesForBook(bookId: String)
 
     @Query("SELECT * FROM pages WHERE ownerId = :ownerId AND isSynced = 0")
     suspend fun getUnsyncedPages(ownerId: String): List<PageEntity>

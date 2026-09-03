@@ -140,11 +140,9 @@ class BookRepositoryImpl @Inject constructor(
             val book = bookDao.getBook(bookId)?.toDomain() ?: error("Book not found")
             require(book.ownerId == ownerId) { "Only the book owner can create a share link" }
 
-            when (val pageUpload = pageRepository.uploadPendingPages(ownerId)) {
-                is AppResult.Error -> error(
-                    "The book pages could not be uploaded: ${pageUpload.message}",
-                )
-                is AppResult.Success -> Unit
+            val pageUploadWarning = when (val pageUpload = pageRepository.uploadPendingPages(ownerId)) {
+                is AppResult.Error -> pageUpload.message
+                is AppResult.Success -> null
             }
 
             val code = "$ownerId:$bookId".toBookInviteCode()
@@ -161,6 +159,7 @@ class BookRepositoryImpl @Inject constructor(
                     "bookId" to bookId,
                     "title" to book.title,
                     "permission" to "editor",
+                    "pageUploadWarning" to pageUploadWarning,
                     "updatedAt" to System.currentTimeMillis(),
                 ),
                 SetOptions.merge(),
@@ -192,9 +191,21 @@ class BookRepositoryImpl @Inject constructor(
         require(invite.exists()) { "This invite link was not found or is not ready yet" }
         val ownerId = invite.getString("ownerId") ?: error("Invite is missing an owner")
         val bookId = invite.getString("bookId") ?: error("Invite is missing a book")
-        require(ownerId != editorUserId) { "You already own this book" }
 
         val bookRef = booksCollection(ownerId).document(bookId)
+        if (ownerId == editorUserId) {
+            val bookDoc = bookRef.get().await()
+            val ownedBook = bookDoc.toBook(ownerId)
+                ?: error("This invite belongs to your account, but the book was not found in cloud backup")
+            val restoredBook = ownedBook.copy(isSynced = true)
+            bookDao.insertBook(restoredBook.toEntity())
+            when (pageRepository.syncFromRemote(ownerId, bookId)) {
+                is AppResult.Error -> Unit
+                is AppResult.Success -> Unit
+            }
+            return@runCatching restoredBook
+        }
+
         bookRef.update(
             mapOf(
                 "sharedEditorIds" to FieldValue.arrayUnion(editorUserId),
@@ -205,13 +216,9 @@ class BookRepositoryImpl @Inject constructor(
         val book = bookDoc.toBook(ownerId) ?: error("Shared book was not found")
         val acceptedBook = book.copy(isSynced = true)
         bookDao.insertBook(acceptedBook.toEntity())
-        when (val pageSync = pageRepository.syncFromRemote(ownerId, bookId)) {
-            is AppResult.Error -> error(
-                "Book access was granted, but its pages could not be downloaded: ${pageSync.message}",
-            )
-            is AppResult.Success -> check(acceptedBook.pageCount == 0 || pageSync.data > 0) {
-                "The owner has not uploaded this book's pages yet. Ask the owner to create and send a new share link."
-            }
+        when (pageRepository.syncFromRemote(ownerId, bookId)) {
+            is AppResult.Error -> Unit
+            is AppResult.Success -> Unit
         }
         acceptedBook
     }.toAppResult()
@@ -230,6 +237,23 @@ class BookRepositoryImpl @Inject constructor(
                     .await()
             }
         }
+        Unit
+    }.toAppResult()
+
+    override suspend fun removeBookLocally(bookId: String, currentUserId: String): AppResult<Unit> = runCatching {
+        val book = bookDao.getBook(bookId)?.toDomain()
+        if (book != null && book.ownerId != currentUserId) {
+            booksCollection(book.ownerId)
+                .document(bookId)
+                .update(
+                    mapOf(
+                        "sharedEditorIds" to FieldValue.arrayRemove(currentUserId),
+                        "updatedAt" to System.currentTimeMillis(),
+                    ),
+                )
+                .await()
+        }
+        bookDao.deleteBook(bookId)
         Unit
     }.toAppResult()
 

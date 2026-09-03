@@ -5,49 +5,50 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 
-private val LightLibraryColors = lightColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF147D83),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFFC8F1F0),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF003739),
-    secondary = androidx.compose.ui.graphics.Color(0xFF9C5571),
-    onSecondary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    secondaryContainer = androidx.compose.ui.graphics.Color(0xFFFFD9E5),
-    onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFF3C1025),
-    tertiary = androidx.compose.ui.graphics.Color(0xFF536FAD),
-    onTertiary = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    tertiaryContainer = androidx.compose.ui.graphics.Color(0xFFDDE5FF),
-    onTertiaryContainer = androidx.compose.ui.graphics.Color(0xFF14254D),
-    background = androidx.compose.ui.graphics.Color(0xFFF7FAFF),
-    onBackground = androidx.compose.ui.graphics.Color(0xFF182027),
-    surface = androidx.compose.ui.graphics.Color(0xFFFFFFFF),
-    onSurface = androidx.compose.ui.graphics.Color(0xFF182027),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFFE8F0F5),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFF47545D),
-    outline = androidx.compose.ui.graphics.Color(0xFF788991),
+private val HiTechDarkColors = darkColorScheme(
+    primary = Color(0xFF00F2FF), // Neon Cyan
+    onPrimary = Color(0xFF003739),
+    primaryContainer = Color(0xFF004F52),
+    onPrimaryContainer = Color(0xFF97F3F6),
+    secondary = Color(0xFFFF00E5), // Neon Magenta
+    onSecondary = Color(0xFF4B0043),
+    secondaryContainer = Color(0xFF6B0061),
+    onSecondaryContainer = Color(0xFFFFD7F3),
+    tertiary = Color(0xFF7000FF), // Electric Purple
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFF4B00B0),
+    onTertiaryContainer = Color(0xFFEDDCFF),
+    background = Color(0xFF050B18), // Deep Space Blue
+    onBackground = Color(0xFFE1E2E5),
+    surface = Color(0xFF0D1424),
+    onSurface = Color(0xFFE1E2E5),
+    surfaceVariant = Color(0xFF1B263B),
+    onSurfaceVariant = Color(0xFFC1C7CE),
+    outline = Color(0xFF8B9199),
 )
 
-private val DarkLibraryColors = darkColorScheme(
-    primary = androidx.compose.ui.graphics.Color(0xFF72D8D7),
-    onPrimary = androidx.compose.ui.graphics.Color(0xFF003738),
-    primaryContainer = androidx.compose.ui.graphics.Color(0xFF07565A),
-    onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFA7F1EF),
-    secondary = androidx.compose.ui.graphics.Color(0xFFFFAEC9),
-    onSecondary = androidx.compose.ui.graphics.Color(0xFF5C1834),
-    secondaryContainer = androidx.compose.ui.graphics.Color(0xFF73344F),
-    onSecondaryContainer = androidx.compose.ui.graphics.Color(0xFFFFD9E5),
-    tertiary = androidx.compose.ui.graphics.Color(0xFFB7C5FF),
-    onTertiary = androidx.compose.ui.graphics.Color(0xFF203566),
-    tertiaryContainer = androidx.compose.ui.graphics.Color(0xFF394B7D),
-    onTertiaryContainer = androidx.compose.ui.graphics.Color(0xFFDDE5FF),
-    background = androidx.compose.ui.graphics.Color(0xFF111A27),
-    onBackground = androidx.compose.ui.graphics.Color(0xFFE4EAF5),
-    surface = androidx.compose.ui.graphics.Color(0xFF182331),
-    onSurface = androidx.compose.ui.graphics.Color(0xFFE4EAF5),
-    surfaceVariant = androidx.compose.ui.graphics.Color(0xFF3E4857),
-    onSurfaceVariant = androidx.compose.ui.graphics.Color(0xFFC3CAD5),
-    outline = androidx.compose.ui.graphics.Color(0xFF8D96A4),
+private val HiTechLightColors = lightColorScheme(
+    primary = Color(0xFF00696D),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFF6FF6FB),
+    onPrimaryContainer = Color(0xFF002021),
+    secondary = Color(0xFF9C4092),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFFFD7F3),
+    onSecondaryContainer = Color(0xFF390035),
+    tertiary = Color(0xFF6B4EA2),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFEDDCFF),
+    onTertiaryContainer = Color(0xFF260058),
+    background = Color(0xFFF8FDFF),
+    onBackground = Color(0xFF191C1D),
+    surface = Color(0xFFF8FDFF),
+    onSurface = Color(0xFF191C1D),
+    surfaceVariant = Color(0xFFDBE4E6),
+    onSurfaceVariant = Color(0xFF3F484A),
+    outline = Color(0xFF6F797A),
 )
 
 @Composable
@@ -55,6 +56,7 @@ fun BookShelfTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) DarkLibraryColors else LightLibraryColors
+    // Forcing Hi-Tech Dark as the primary experience for "Hi-Tech" feel
+    val colorScheme = if (darkTheme) HiTechDarkColors else HiTechDarkColors
     MaterialTheme(colorScheme = colorScheme, content = content)
 }

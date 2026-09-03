@@ -26,6 +26,7 @@ class SyncWorker @AssistedInject constructor(
         val results = listOf(
             bookRepository.syncToRemote(user.uid),
             pageRepository.uploadPendingPages(user.uid),
+            bookRepository.syncFromRemote(user.uid),
         )
         val errors = results.filterIsInstance<AppResult.Error>()
         if (errors.isEmpty()) return Result.success()
@@ -46,7 +47,7 @@ class SyncWorker @AssistedInject constructor(
         private const val MAX_RETRIES = 3
 
         fun enqueuePeriodicSync(context: Context) {
-            val request = PeriodicWorkRequestBuilder<SyncWorker>(30, TimeUnit.MINUTES)
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
                 .build()

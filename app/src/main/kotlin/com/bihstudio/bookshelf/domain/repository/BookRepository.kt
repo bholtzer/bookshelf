@@ -28,6 +28,9 @@ interface BookRepository {
 
     suspend fun deleteBook(bookId: String): AppResult<Unit>
 
+    /** Decline a shared book for this user, then remove it from this device/account cache. */
+    suspend fun removeBookLocally(bookId: String, currentUserId: String): AppResult<Unit>
+
     /**
      * Push local changes to Firestore. Called by WorkManager's SyncWorker.
      * Returns the number of books successfully synced.

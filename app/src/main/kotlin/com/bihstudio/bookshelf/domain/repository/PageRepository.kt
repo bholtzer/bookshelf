@@ -12,6 +12,9 @@ interface PageRepository {
     /** Live stream of selected pages, used for book cover thumbnails. */
     fun observePagesByIds(pageIds: List<String>): Flow<List<Page>>
 
+    /** Live stream of the first page for each book, used for open-book previews. */
+    fun observeFirstPagesForBooks(bookIds: List<String>): Flow<Map<String, Page>>
+
     suspend fun getPage(pageId: String): Page?
 
     /**

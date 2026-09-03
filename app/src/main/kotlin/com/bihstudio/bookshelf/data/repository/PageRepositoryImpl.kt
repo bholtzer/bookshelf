@@ -20,6 +20,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.time.Instant
 import javax.inject.Inject
@@ -39,6 +40,13 @@ class PageRepositoryImpl @Inject constructor(
 
     override fun observePagesByIds(pageIds: List<String>): Flow<List<Page>> =
         pageDao.observePagesByIds(pageIds).map { list -> list.map { it.toDomain() } }
+
+    override fun observeFirstPagesForBooks(bookIds: List<String>): Flow<Map<String, Page>> =
+        pageDao.observePagesForBooks(bookIds).map { pages ->
+            pages
+                .groupBy { it.bookId }
+                .mapValues { (_, bookPages) -> bookPages.first().toDomain() }
+        }
 
     override suspend fun getPage(pageId: String): Page? =
         pageDao.getPage(pageId)?.toDomain()
@@ -82,6 +90,12 @@ class PageRepositoryImpl @Inject constructor(
         orderedIds.forEachIndexed { index, pageId ->
             pageDao.updatePosition(pageId, index)
         }
+        bookDao.updatePageCount(
+            bookId = bookId,
+            count = pageDao.countPages(bookId),
+            updatedAt = Instant.now().toEpochMilli(),
+        )
+        SyncWorker.enqueueImmediateSync(context)
     }.toAppResult()
 
     // ── Delete ────────────────────────────────────────────────────────────────
@@ -96,6 +110,13 @@ class PageRepositoryImpl @Inject constructor(
         // Best-effort remote delete
         entity.remoteUrl?.let {
             runCatching { storage.getReferenceFromUrl(it).delete().await() }
+        }
+        val bookOwnerId = bookDao.getBook(entity.bookId)?.ownerId ?: entity.ownerId
+        runCatching {
+            pagesCollection(bookOwnerId, entity.bookId)
+                .document(entity.id)
+                .delete()
+                .await()
         }
 
         // Update book pageCount
@@ -130,6 +151,17 @@ class PageRepositoryImpl @Inject constructor(
             userId = ownerId,
             editorToken = "|$ownerId|",
         )
+        if (isStorageUploadTemporarilyBlocked()) {
+            for (entity in unsynced) {
+                val bookOwnerId = bookDao.getBook(entity.bookId)?.ownerId ?: entity.ownerId
+                pagesCollection(bookOwnerId, entity.bookId)
+                    .document(entity.id)
+                    .set(entity.toFirestoreMap(entity.remoteUrl), SetOptions.merge())
+                    .await()
+            }
+            return@runCatching 0
+        }
+
         var count = 0
         val failures = mutableListOf<String>()
         var firstFailure: Throwable? = null
@@ -165,6 +197,16 @@ class PageRepositoryImpl @Inject constructor(
             } catch (e: Exception) {
                 if (firstFailure == null) firstFailure = e
                 val message = e.toPageSyncMessage()
+                runCatching {
+                    val bookOwnerId = bookDao.getBook(entity.bookId)?.ownerId ?: entity.ownerId
+                    pagesCollection(bookOwnerId, entity.bookId)
+                        .document(entity.id)
+                        .set(entity.toFirestoreMap(entity.remoteUrl), SetOptions.merge())
+                        .await()
+                }
+                if (e.isFirebaseStorageNotFound()) {
+                    blockStorageUploadsTemporarily()
+                }
                 pageDao.markSyncError(entity.id, message)
                 failures += "${entity.originalFileName.ifBlank { entity.id }}: $message"
             }
@@ -187,8 +229,14 @@ class PageRepositoryImpl @Inject constructor(
         val snapshot = pagesCollection(ownerId, bookId).get().await()
         val pages = snapshot.documents.mapNotNull { doc ->
             doc.toPageEntity(ownerId, bookId)
-        }.map { entity -> entity.withDownloadedPdf() }
+        }.map { entity -> entity.withDownloadedFileIfAvailable() }
         pageDao.insertPages(pages)
+        val remoteIds = pages.map { it.id }
+        if (remoteIds.isEmpty()) {
+            pageDao.deleteAllSyncedPagesForBook(bookId)
+        } else {
+            pageDao.deleteSyncedPagesNotIn(bookId, remoteIds)
+        }
         pages.size
     }.toAppResult()
 
@@ -211,7 +259,7 @@ class PageRepositoryImpl @Inject constructor(
             .collection("pages")
 
     private fun com.bihstudio.bookshelf.data.local.model.PageEntity.toFirestoreMap(
-        downloadUrl: String,
+        downloadUrl: String?,
     ): Map<String, Any?> = mapOf(
         "id"               to id,
         "bookId"           to bookId,
@@ -245,13 +293,39 @@ class PageRepositoryImpl @Inject constructor(
         )
     }
 
-    private suspend fun PageEntity.withDownloadedPdf(): PageEntity {
-        if (pageType != com.bihstudio.bookshelf.domain.model.PageType.PDF.name) return this
+    private suspend fun PageEntity.withDownloadedFileIfAvailable(): PageEntity {
         val url = remoteUrl?.takeIf { it.isNotBlank() } ?: return this
         val dir = File(context.filesDir, "pages").also { it.mkdirs() }
-        val destination = File(dir, "$id.pdf")
-        storage.getReferenceFromUrl(url).getFile(destination).await()
-        return copy(localUri = destination.absolutePath)
+        val extension = when (pageType) {
+            com.bihstudio.bookshelf.domain.model.PageType.PDF.name -> "pdf"
+            com.bihstudio.bookshelf.domain.model.PageType.IMAGE.name -> remoteFileExtension(url)
+            else -> return this
+        }
+        val destination = File(dir, "$id.$extension")
+        return runCatching {
+            withTimeout(8_000) {
+                storage.getReferenceFromUrl(url).getFile(destination).await()
+            }
+            copy(localUri = destination.absolutePath, syncError = null)
+        }.getOrElse { error ->
+            if (error.isFirebaseStorageNotFound()) {
+                copy(syncError = "Remote file is missing from Firebase Storage. The owner should upload this page again.")
+            } else {
+                throw error
+            }
+        }
+    }
+
+    companion object {
+        private const val STORAGE_UPLOAD_RECHECK_DELAY_MS = 60 * 60 * 1000L
+        @Volatile private var storageUploadBlockedUntilMillis: Long = 0L
+
+        private fun isStorageUploadTemporarilyBlocked(): Boolean =
+            System.currentTimeMillis() < storageUploadBlockedUntilMillis
+
+        private fun blockStorageUploadsTemporarily() {
+            storageUploadBlockedUntilMillis = System.currentTimeMillis() + STORAGE_UPLOAD_RECHECK_DELAY_MS
+        }
     }
 }
 
@@ -260,6 +334,17 @@ private fun String.toIdList(): List<String> =
 
 private fun Any?.toStringList(): List<String> =
     (this as? List<*>)?.mapNotNull { it as? String }.orEmpty()
+
+private fun remoteFileExtension(url: String): String {
+    val cleanUrl = url.substringBefore("?").lowercase()
+    return when {
+        cleanUrl.endsWith(".png") -> "png"
+        cleanUrl.endsWith(".webp") -> "webp"
+        cleanUrl.endsWith(".jpeg") -> "jpeg"
+        cleanUrl.endsWith(".jpg") -> "jpg"
+        else -> "jpg"
+    }
+}
 
 private fun <T> Result<T>.toAppResult(): AppResult<T> =
     fold(
@@ -279,6 +364,12 @@ private fun Throwable.toPageSyncMessage(): String {
         else -> message ?: "Unknown page synchronization error"
     }
 }
+
+private fun Throwable.isFirebaseStorageNotFound(): Boolean =
+    findCause<StorageException>()?.httpResultCode == 404 ||
+        message?.contains("\"code\": 404", ignoreCase = true) == true ||
+        message?.contains("Object does not exist", ignoreCase = true) == true ||
+        message?.contains("Not Found", ignoreCase = true) == true
 
 private class PageUploadBatchException(
     message: String,

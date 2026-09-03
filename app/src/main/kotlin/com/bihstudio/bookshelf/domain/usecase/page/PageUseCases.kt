@@ -24,6 +24,13 @@ class ObservePagesByIdsUseCase @Inject constructor(
         pageRepository.observePagesByIds(pageIds)
 }
 
+class ObserveFirstPagesForBooksUseCase @Inject constructor(
+    private val pageRepository: PageRepository,
+) {
+    operator fun invoke(bookIds: List<String>): Flow<Map<String, Page>> =
+        pageRepository.observeFirstPagesForBooks(bookIds)
+}
+
 class SyncBookPagesUseCase @Inject constructor(
     private val bookRepository: BookRepository,
     private val pageRepository: PageRepository,

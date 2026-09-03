@@ -11,6 +11,7 @@ import com.bihstudio.bookshelf.presentation.auth.AuthScreen
 import com.bihstudio.bookshelf.presentation.bookshelf.BookShelfScreen
 import com.bihstudio.bookshelf.presentation.detail.BookDetailScreen
 import com.bihstudio.bookshelf.presentation.opening.OpeningScreen
+import com.bihstudio.bookshelf.presentation.subscription.PaywallScreen
 import com.bihstudio.bookshelf.presentation.viewer.BookViewerScreen
 
 object Route {
@@ -19,6 +20,7 @@ object Route {
     const val BOOKSHELF  = "com.bihstudio.bookshelf"
     const val VIEWER     = "viewer/{bookId}"
     const val DETAIL     = "detail/{bookId}"
+    const val PRO        = "pro"
 
     fun viewer(bookId: String) = "viewer/$bookId"
     fun detail(bookId: String) = "detail/$bookId"
@@ -59,6 +61,7 @@ fun BookshelfNavGraph(
 
         composable(Route.BOOKSHELF) {
             BookShelfScreen(
+                onUpgrade = { navController.navigate(Route.PRO) },
                 onOpenBook = { bookId ->
                     analytics.track(
                         AnalyticsEvent.BOOK_OPENED,
@@ -82,6 +85,10 @@ fun BookshelfNavGraph(
                 pendingInviteText = pendingBookInvite,
                 onInviteConsumed = onBookInviteConsumed,
             )
+        }
+
+        composable(Route.PRO) {
+            PaywallScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Route.VIEWER) { back ->

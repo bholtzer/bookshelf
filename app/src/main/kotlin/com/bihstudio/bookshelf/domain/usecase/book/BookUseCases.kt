@@ -164,3 +164,10 @@ class DeleteBookUseCase @Inject constructor(
     suspend operator fun invoke(bookId: String): AppResult<Unit> =
         bookRepository.deleteBook(bookId)
 }
+
+class RemoveBookLocallyUseCase @Inject constructor(
+    private val bookRepository: BookRepository,
+) {
+    suspend operator fun invoke(bookId: String, currentUserId: String): AppResult<Unit> =
+        bookRepository.removeBookLocally(bookId, currentUserId)
+}

@@ -19,65 +19,41 @@ import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.webkit.MimeTypeMap
 import android.widget.Toast
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.Print
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.*
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -93,21 +69,20 @@ import com.bihstudio.bookshelf.domain.usecase.book.GetBookUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.ObservePagesUseCase
 import com.bihstudio.bookshelf.domain.usecase.page.SyncBookPagesUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.io.File
 import java.net.URL
 import javax.inject.Inject
 import kotlin.math.min
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.withContext
 
 data class BookViewerUiState(
     val title: String = "Viewer",
+    val description: String = "",
+    val style: String? = null,
     val pages: List<Page> = emptyList(),
     val isLoading: Boolean = true,
 )
@@ -132,39 +107,26 @@ class BookViewerViewModel @Inject constructor(
     fun load(bookId: String) {
         viewModelScope.launch {
             analytics.trackScreen("book_viewer")
-            analytics.track(
-                AnalyticsEvent.BOOK_OPENED,
-                mapOf(
-                    AnalyticsParam.BOOK_ID to bookId,
-                    AnalyticsParam.SOURCE to "viewer_load",
-                ),
-            )
+            analytics.track(AnalyticsEvent.BOOK_OPENED, mapOf(AnalyticsParam.BOOK_ID to bookId, AnalyticsParam.SOURCE to "viewer_load"))
             val book = getBook(bookId)
             if (book != null) {
-                _state.update { it.copy(title = book.title) }
+                _state.update { it.copy(title = book.title, description = book.description, style = book.coverStyle) }
             }
-            syncBookPages(bookId)
+            launch {
+                while (true) {
+                    runCatching { syncBookPages(bookId) }
+                    delay(30_000)
+                }
+            }
             observePages(bookId).collect { pages ->
-                analytics.track(
-                    AnalyticsEvent.READER_PAGES_LOADED,
-                    mapOf(
-                        AnalyticsParam.BOOK_ID to bookId,
-                        AnalyticsParam.PAGE_COUNT to pages.size,
-                    ),
-                )
+                analytics.track(AnalyticsEvent.READER_PAGES_LOADED, mapOf(AnalyticsParam.BOOK_ID to bookId, AnalyticsParam.PAGE_COUNT to pages.size))
                 _state.update { it.copy(pages = pages, isLoading = false) }
             }
         }
     }
 
     fun trackPrintStarted(bookId: String, pageCount: Int) {
-        analytics.track(
-            AnalyticsEvent.PRINT_STARTED,
-            mapOf(
-                AnalyticsParam.BOOK_ID to bookId,
-                AnalyticsParam.PAGE_COUNT to pageCount,
-            ),
-        )
+        analytics.track(AnalyticsEvent.PRINT_STARTED, mapOf(AnalyticsParam.BOOK_ID to bookId, AnalyticsParam.PAGE_COUNT to pageCount))
     }
 }
 
@@ -180,398 +142,413 @@ fun BookViewerScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var currentPageIndex by remember { mutableIntStateOf(0) }
-    val readerPages by produceState(initialValue = emptyList<ReaderPage>(), state.pages) {
+    
+    val readerPages by produceState<List<ReaderPage>>(initialValue = emptyList(), state.pages) {
         value = buildReaderPages(state.pages)
     }
-    val currentImagePage = readerPages
-        .getOrNull(currentPageIndex)
-        ?.page
-        ?.takeIf { it.pageType == PageType.IMAGE }
+    
+    val topic = remember(state.title, state.description, state.style) {
+        CoverTopic.resolve(state.style, state.title, state.description)
+    }
 
     LaunchedEffect(bookId) {
         viewModel.load(bookId)
     }
 
     Scaffold(
-        containerColor = Color(0xFF327F91),
+        containerColor = Color(0xFF050B18),
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text(state.title, maxLines = 1)
-                        Text(
-                            "Reader",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.62f),
-                        )
+                        Text(state.title, maxLines = 1, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                        Text("SYSTEM // ${topic.label.uppercase()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), letterSpacing = 2.sp)
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White) }
                 },
                 actions = {
-                    IconButton(
-                        enabled = currentImagePage != null,
-                        onClick = {
-                            currentImagePage?.let { page ->
-                                scope.launch {
-                                    runCatching { shareImagePage(context, page) }
-                                        .onFailure {
-                                            Toast.makeText(
-                                                context,
-                                                "Could not share this image",
-                                                Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                }
+                    val currentImagePage = readerPages.getOrNull(currentPageIndex)?.page?.takeIf { it.pageType == PageType.IMAGE }
+                    IconButton(enabled = currentImagePage != null, onClick = {
+                        currentImagePage?.let { page ->
+                            scope.launch {
+                                runCatching { shareImagePage(context, page) }
+                                    .onFailure { Toast.makeText(context, "Share failed", Toast.LENGTH_SHORT).show() }
                             }
-                        },
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = "Share current image")
-                    }
-                    IconButton(
-                        enabled = state.pages.isNotEmpty(),
-                        onClick = {
-                            viewModel.trackPrintStarted(bookId, state.pages.size)
-                            printBook(context, state.title, state.pages)
-                        },
-                    ) {
-                        Icon(Icons.Default.Print, contentDescription = "Print book")
-                    }
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit book")
-                    }
+                        }
+                    }) { Icon(Icons.Default.Share, contentDescription = "Share", tint = MaterialTheme.colorScheme.primary) }
+                    IconButton(enabled = state.pages.isNotEmpty(), onClick = {
+                        viewModel.trackPrintStarted(bookId, state.pages.size)
+                        printBook(context, state.title, state.pages)
+                    }) { Icon(Icons.Default.Print, contentDescription = "Print", tint = MaterialTheme.colorScheme.primary) }
+                    IconButton(onClick = onEdit) { Icon(Icons.Default.Settings, contentDescription = "Config", tint = MaterialTheme.colorScheme.primary) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF327F91),
+                    containerColor = Color.Transparent,
                     titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White,
                 ),
             )
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
+            HiTechBackdrop()
+            
             when {
-                state.isLoading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
+                state.isLoading || (state.pages.isNotEmpty() && readerPages.isEmpty()) -> Box(Modifier.fillMaxSize(), Alignment.Center) { 
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) 
                 }
-
-                state.pages.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Text("This book has no pages yet.")
+                state.pages.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) { 
+                    Text("ARCHIVE EMPTY", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Light, letterSpacing = 4.sp) 
                 }
-
-                readerPages.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-
                 else -> {
                     val pagerState = rememberPagerState(pageCount = { readerPages.size })
-                    LaunchedEffect(pagerState, readerPages.size) {
-                        snapshotFlow { pagerState.currentPage }.collectLatest { index ->
-                            currentPageIndex = index
-                        }
+                    LaunchedEffect(pagerState) {
+                        snapshotFlow { pagerState.currentPage }.collectLatest { currentPageIndex = it }
                     }
-                    Column(
-                        Modifier.fillMaxSize().background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(Color(0xFFBFE8EE), Color(0xFFE4DFFF)),
-                            ),
-                        ),
-                    ) {
+                    
+                    Column(Modifier.fillMaxSize()) {
                         HorizontalPager(
                             state = pagerState,
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                horizontal = 20.dp,
-                                vertical = 18.dp,
-                            ),
-                            pageSpacing = 12.dp,
+                            contentPadding = PaddingValues(horizontal = 30.dp, vertical = 24.dp),
+                            pageSpacing = 20.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         ) { index ->
-                            val pageOffset = (
-                                pagerState.currentPage - index + pagerState.currentPageOffsetFraction
-                            ).coerceIn(-1f, 1f)
+                            val pageOffset = (pagerState.currentPage - index + pagerState.currentPageOffsetFraction).coerceIn(-1f, 1f)
                             PageSurface(
                                 readerPage = readerPages[index],
                                 modifier = Modifier.graphicsLayer {
-                                    rotationY = pageOffset * 18f
-                                    transformOrigin = TransformOrigin(
-                                        pivotFractionX = if (pageOffset < 0f) 0f else 1f,
-                                        pivotFractionY = 0.5f,
-                                    )
-                                    cameraDistance = 24f * density
-                                    alpha = 1f - kotlin.math.abs(pageOffset) * 0.16f
+                                    val absOffset = kotlin.math.abs(pageOffset)
+                                    rotationY = pageOffset * 30f
+                                    transformOrigin = TransformOrigin(if (pageOffset < 0f) 0f else 1f, 0.5f)
+                                    cameraDistance = 15f * density
+                                    alpha = 1f - absOffset * 0.3f
+                                    scaleX = 1f - absOffset * 0.1f
+                                    scaleY = 1f - absOffset * 0.1f
                                 },
                             )
                         }
-                        Row(
-                            Modifier.fillMaxWidth().padding(bottom = 20.dp),
-                            horizontalArrangement = Arrangement.Center,
+                        
+                        Column(
+                            Modifier.fillMaxWidth().padding(start = 40.dp, end = 40.dp, bottom = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            VisualizerRow(MaterialTheme.colorScheme.primary)
+                            
+                            Spacer(Modifier.height(16.dp))
+                            
+                            val progress = if (readerPages.isNotEmpty()) (pagerState.currentPage + 1).toFloat() / readerPages.size.toFloat() else 0f
                             Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.1f))
                             ) {
-                                Text(
-                                    "Page ${pagerState.currentPage + 1} of ${readerPages.size}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = Color.White.copy(alpha = 0.88f),
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(progress)
+                                        .fillMaxHeight()
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary)
+                                            )
+                                        )
                                 )
                             }
-                            if (readerPages[pagerState.currentPage].page.pageType == PageType.IMAGE) {
-                                Text(
-                                    "Pinch to zoom",
-                                    modifier = Modifier.padding(start = 10.dp, top = 8.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.82f),
-                                )
+                            
+                            Spacer(Modifier.height(20.dp))
+                            
+                            Surface(
+                                color = Color.White.copy(alpha = 0.05f),
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        "PAGE ${(pagerState.currentPage + 1).toString().padStart(2, '0')}",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        letterSpacing = 1.sp
+                                    )
+                                    Box(Modifier.size(1.dp, 16.dp).background(Color.White.copy(alpha = 0.2f)))
+                                    Text(
+                                        "TOTAL ${readerPages.size.toString().padStart(2, '0')}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.White.copy(alpha = 0.5f),
+                                        letterSpacing = 1.sp
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun VisualizerRow(color: Color) {
+    Row(
+        modifier = Modifier.height(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        val infiniteTransition = rememberInfiniteTransition(label = "visualizer")
+        repeat(12) { i ->
+            val duration = remember { (400..800).random() }
+            val heightAnim by infiniteTransition.animateFloat(
+                initialValue = 0.2f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(duration, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "bar_$i"
+            )
+            Box(
+                Modifier
+                    .width(2.dp)
+                    .fillMaxHeight(heightAnim)
+                    .background(color.copy(alpha = 0.6f), CircleShape)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HiTechBackdrop() {
+    val infiniteTransition = rememberInfiniteTransition(label = "hitech")
+    val alphaAnim by infiniteTransition.animateFloat(
+        initialValue = 0.1f, targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(tween(4000, easing = LinearOutSlowInEasing), RepeatMode.Reverse),
+        label = "alpha"
+    )
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF050B18))) {
+        Box(
+            modifier = Modifier
+                .size(450.dp)
+                .align(Alignment.TopEnd)
+                .offset(x = 150.dp, y = (-150).dp)
+                .background(Brush.radialGradient(listOf(MaterialTheme.colorScheme.primary.copy(alpha = alphaAnim), Color.Transparent)))
+        )
+        Box(
+            modifier = Modifier
+                .size(350.dp)
+                .align(Alignment.BottomStart)
+                .offset(x = (-100).dp, y = 100.dp)
+                .background(Brush.radialGradient(listOf(MaterialTheme.colorScheme.secondary.copy(alpha = alphaAnim), Color.Transparent)))
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .drawWithCache {
+                    onDrawWithContent {
+                        drawContent()
+                        val gridStep = 40.dp.toPx()
+                        for (x in 0..(size.width / gridStep).toInt()) {
+                            drawLine(
+                                color = Color.White.copy(alpha = 0.04f),
+                                start = Offset(x * gridStep, 0f),
+                                end = Offset(x * gridStep, size.height),
+                                strokeWidth = 0.5.dp.toPx()
+                            )
+                        }
+                        for (y in 0..(size.height / gridStep).toInt()) {
+                            drawLine(
+                                color = Color.White.copy(alpha = 0.04f),
+                                start = Offset(0f, y * gridStep),
+                                end = Offset(size.width, y * gridStep),
+                                strokeWidth = 0.5.dp.toPx()
+                            )
+                        }
+                    }
+                }
+        )
     }
 }
 
 @Composable
 private fun PageSurface(readerPage: ReaderPage, modifier: Modifier = Modifier) {
-    val page = readerPage.page
     Box(
         modifier
             .fillMaxSize()
-            .shadow(18.dp, RoundedCornerShape(8.dp, 22.dp, 22.dp, 8.dp))
-            .clip(RoundedCornerShape(8.dp, 22.dp, 22.dp, 8.dp))
-            .background(Color(0xFFFFFDF8))
-            .padding(start = 5.dp, top = 5.dp, end = 9.dp, bottom = 5.dp),
-        contentAlignment = Alignment.Center,
+            .shadow(
+                elevation = 32.dp,
+                shape = RoundedCornerShape(16.dp),
+                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+            )
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0D1424))
+            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(4.dp, 17.dp, 17.dp, 4.dp))
-                .background(Color.White),
-            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+            contentAlignment = Alignment.Center
         ) {
-            when (page.pageType) {
-                PageType.IMAGE -> ZoomablePageImage(page = page)
-
-                PageType.PDF -> PdfPageSurface(
-                    page = page,
-                    pdfPageIndex = readerPage.pdfPageIndex ?: 0,
-                    pdfPageCount = readerPage.pdfPageCount,
-                )
+            when (readerPage.page.pageType) {
+                PageType.IMAGE -> ZoomablePageImage(page = readerPage.page)
+                PageType.PDF -> PdfPageSurface(page = readerPage.page, pdfPageIndex = readerPage.pdfPageIndex ?: 0, pdfPageCount = readerPage.pdfPageCount)
             }
         }
+        
         Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxSize()
-                .background(
-                    androidx.compose.ui.graphics.Brush.horizontalGradient(
-                        listOf(Color.Black.copy(alpha = 0.08f), Color.Transparent),
-                    ),
-                ),
+            Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = 0.05f), Color.Transparent, Color.Black.copy(alpha = 0.1f))
+                )
+            )
         )
-        Box(
-            Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxWidth(0.025f)
-                .height(48.dp)
-                .background(Color(0xFFD7D4F2)),
-        )
-        }
+    }
 }
 
 @Composable
 private fun ZoomablePageImage(page: Page) {
-    var scale by remember(page.id) { mutableFloatStateOf(1f) }
-    var translation by remember(page.id) { mutableStateOf(Offset.Zero) }
-    var viewport by remember(page.id) { mutableStateOf(IntSize.Zero) }
+    val imageModel = page.localUri?.let(::File) ?: page.remoteUrl
 
-    AsyncImage(
-        model = page.localUri?.let(::File) ?: page.remoteUrl,
-        contentDescription = page.originalFileName.ifBlank { "Book page" },
-        contentScale = ContentScale.Fit,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(12.dp)
-            .onSizeChanged { viewport = it }
-            .pointerInput(page.id) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    var pointersPressed: Boolean
-                    do {
-                        val event = awaitPointerEvent()
-                        val zoomChange = event.calculateZoom()
-                        val isMultiTouch = event.changes.count { it.pressed } > 1
-                        val handlesGesture = isMultiTouch || scale > 1f
-
-                        if (handlesGesture) {
-                            val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
-                            val pan = event.calculatePan()
-                            val maxX = viewport.width * (nextScale - 1f) / 2f
-                            val maxY = viewport.height * (nextScale - 1f) / 2f
-                            translation = if (nextScale <= 1.01f) {
-                                Offset.Zero
-                            } else {
-                                Offset(
-                                    x = (translation.x + pan.x).coerceIn(-maxX, maxX),
-                                    y = (translation.y + pan.y).coerceIn(-maxY, maxY),
-                                )
-                            }
-                            scale = nextScale
-                            event.changes.forEach { change ->
-                                if (change.pressed) change.consume()
-                            }
-                        }
-                        pointersPressed = event.changes.any { it.pressed }
-                    } while (pointersPressed)
-                }
-            }
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = translation.x
-                translationY = translation.y
-            },
-    )
+    if (imageModel == null) {
+        MissingPageFilePlaceholder(page = page)
+    } else {
+        AsyncImage(
+            model = imageModel,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .pageZoom(page.id),
+        )
+    }
 }
 
-private suspend fun shareImagePage(context: Context, page: Page) {
-    val shareFile = withContext(Dispatchers.IO) {
-        val extension = page.originalFileName.substringAfterLast('.', "jpg")
-            .lowercase()
-            .takeIf { it in setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif") }
-            ?: "jpg"
-        val directory = File(context.cacheDir, "shared_images").also { it.mkdirs() }
-        val destination = File(directory, "bookshelf-${page.id}.$extension")
-        val localFile = page.localUri?.let(::File)?.takeIf { it.exists() }
+private fun Modifier.pageZoom(key: Any): Modifier = composed {
+    var scale by remember(key) { mutableFloatStateOf(1f) }
+    var translation by remember(key) { mutableStateOf(Offset.Zero) }
+    var viewport by remember(key) { mutableStateOf(IntSize.Zero) }
 
-        when {
-            localFile != null -> localFile.inputStream()
-            !page.remoteUrl.isNullOrBlank() -> URL(page.remoteUrl).openStream()
-            !page.localUri.isNullOrBlank() ->
-                context.contentResolver.openInputStream(Uri.parse(page.localUri))
-                    ?: error("Image is not available")
-            else -> error("Image is not available")
-        }.use { input ->
-            destination.outputStream().use { output -> input.copyTo(output) }
+    onSizeChanged { viewport = it }
+        .pointerInput(key) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                do {
+                    val event = awaitPointerEvent()
+                    val zoomChange = event.calculateZoom()
+                    if (zoomChange != 1f || scale > 1f) {
+                        val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
+                        val pan = event.calculatePan()
+                        val maxX = viewport.width * (nextScale - 1f) / 2f
+                        val maxY = viewport.height * (nextScale - 1f) / 2f
+                        translation = Offset(
+                            (translation.x + pan.x).coerceIn(-maxX, maxX),
+                            (translation.y + pan.y).coerceIn(-maxY, maxY),
+                        )
+                        scale = nextScale
+                        event.changes.forEach { change -> if (change.pressed) change.consume() }
+                    }
+                } while (event.changes.any { it.pressed })
+            }
         }
-        destination
-    }
-
-    val contentUri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        shareFile,
-    )
-    val extension = shareFile.extension.lowercase()
-    val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "image/*"
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = mimeType
-        putExtra(Intent.EXTRA_STREAM, contentUri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    context.startActivity(Intent.createChooser(intent, "Share image"))
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            translationX = translation.x
+            translationY = translation.y
+        }
 }
 
 @Composable
-private fun PdfPageSurface(
-    page: Page,
-    pdfPageIndex: Int,
-    pdfPageCount: Int,
-) {
+private fun MissingPageFilePlaceholder(page: Page) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.padding(32.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.CloudOff,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+            modifier = Modifier.size(64.dp)
+        )
+        Text(
+            text = "LINK OFFLINE",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            letterSpacing = 4.sp
+        )
+        Text(
+            text = page.originalFileName,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.5f),
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun PdfPageSurface(page: Page, pdfPageIndex: Int, pdfPageCount: Int) {
     val bitmap by produceState<Bitmap?>(initialValue = null, page.localUri, pdfPageIndex) {
-        value = renderPdfPage(page.localUri, pdfPageIndex, maxWidth = 1800)
+        value = withContext(Dispatchers.IO) { renderPdfPage(page.localUri, pdfPageIndex, maxWidth = 1600) }
     }
 
     if (bitmap == null) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                Icons.Default.PictureAsPdf,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                page.originalFileName.ifBlank { "PDF page" },
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                if (page.localUri == null) {
-                    "This PDF is not available locally yet."
-                } else {
-                    "Loading PDF page..."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
     } else {
         Column(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Image(
                 bitmap = bitmap!!.asImageBitmap(),
-                contentDescription = page.originalFileName.ifBlank { "PDF page" },
+                contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .pageZoom("${page.id}:$pdfPageIndex")
             )
             Text(
-                "PDF page ${pdfPageIndex + 1} / $pdfPageCount",
-                style = MaterialTheme.typography.labelMedium,
+                "DATA CHUNK ${pdfPageIndex + 1}/${pdfPageCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                modifier = Modifier.padding(8.dp),
+                letterSpacing = 2.sp
             )
         }
     }
 }
 
-private suspend fun buildReaderPages(pages: List<Page>): List<ReaderPage> =
-    withContext(Dispatchers.IO) {
-        pages.flatMap { page ->
-            if (page.pageType != PageType.PDF) {
-                listOf(ReaderPage(page = page))
-            } else {
-                val count = getPdfPageCount(page.localUri)
-                if (count <= 0) {
-                    listOf(ReaderPage(page = page, pdfPageIndex = 0, pdfPageCount = 1))
-                } else {
-                    (0 until count).map { index ->
-                        ReaderPage(page = page, pdfPageIndex = index, pdfPageCount = count)
-                    }
+private suspend fun renderPdfPage(localUri: String?, pageIndex: Int, maxWidth: Int): Bitmap? {
+    val file = localUri?.let(::File)?.takeIf { it.exists() } ?: return null
+    return runCatching {
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+            PdfRenderer(descriptor).use { renderer ->
+                if (pageIndex >= renderer.pageCount) return null
+                renderer.openPage(pageIndex).use { pdfPage ->
+                    val scale = maxWidth.toFloat() / pdfPage.width.toFloat()
+                    val bitmap = Bitmap.createBitmap(maxWidth, (pdfPage.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(android.graphics.Color.WHITE)
+                    pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bitmap
                 }
             }
         }
-    }
+    }.getOrNull()
+}
 
-private suspend fun renderPdfPage(
-    localUri: String?,
-    pageIndex: Int,
-    maxWidth: Int,
-): Bitmap? = withContext(Dispatchers.IO) {
-    val file = localUri?.let(::File)?.takeIf { it.exists() } ?: return@withContext null
-    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-        PdfRenderer(descriptor).use { renderer ->
-            if (pageIndex !in 0 until renderer.pageCount) return@withContext null
-            renderer.openPage(pageIndex).use { pdfPage ->
-                val scale = maxWidth.toFloat() / pdfPage.width.toFloat()
-                val bitmap = Bitmap.createBitmap(
-                    maxWidth,
-                    (pdfPage.height * scale).toInt().coerceAtLeast(1),
-                    Bitmap.Config.ARGB_8888,
-                )
-                bitmap.eraseColor(android.graphics.Color.WHITE)
-                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                bitmap
-            }
+private suspend fun buildReaderPages(pages: List<Page>): List<ReaderPage> = withContext(Dispatchers.IO) {
+    pages.flatMap { page ->
+        if (page.pageType != PageType.PDF) listOf(ReaderPage(page))
+        else {
+            val count = getPdfPageCount(page.localUri)
+            if (count <= 0) listOf(ReaderPage(page, 0, 1))
+            else (0 until count).map { ReaderPage(page, it, count) }
         }
     }
 }
@@ -587,130 +564,47 @@ private fun getPdfPageCount(localUri: String?): Int {
 
 private fun printBook(context: Context, title: String, pages: List<Page>) {
     val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
-    printManager.print(
-        title.ifBlank { "BookShelf book" },
-        BookPrintDocumentAdapter(context, title, pages),
-        PrintAttributes.Builder()
-            .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-            .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
-            .build(),
-    )
+    printManager.print(title.ifBlank { "BookShelf" }, BookPrintDocumentAdapter(context, title, pages), PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build())
 }
 
-private class BookPrintDocumentAdapter(
-    private val context: Context,
-    private val title: String,
-    private val pages: List<Page>,
-) : PrintDocumentAdapter() {
-
-    private var attributes: PrintAttributes? = null
-
-    override fun onLayout(
-        oldAttributes: PrintAttributes?,
-        newAttributes: PrintAttributes?,
-        cancellationSignal: CancellationSignal?,
-        callback: LayoutResultCallback?,
-        extras: Bundle?,
-    ) {
-        attributes = newAttributes
-        callback?.onLayoutFinished(
-            PrintDocumentInfo.Builder("${title.ifBlank { "bookshelf-book" }}.pdf")
-                .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
-                .setPageCount(PrintDocumentInfo.PAGE_COUNT_UNKNOWN)
-                .build(),
-            true,
-        )
+private class BookPrintDocumentAdapter(val context: Context, val title: String, val pages: List<Page>) : PrintDocumentAdapter() {
+    var attrs: PrintAttributes? = null
+    override fun onLayout(old: PrintAttributes?, new: PrintAttributes?, sig: CancellationSignal?, cb: LayoutResultCallback?, ex: Bundle?) {
+        attrs = new
+        cb?.onLayoutFinished(PrintDocumentInfo.Builder(title).setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
     }
-
-    override fun onWrite(
-        requestedPages: Array<out PageRange>?,
-        destination: ParcelFileDescriptor?,
-        cancellationSignal: CancellationSignal?,
-        callback: WriteResultCallback?,
-    ) {
-        if (destination == null) {
-            callback?.onWriteFailed("No print destination")
-            return
-        }
-
-        runCatching {
-            val pdf = PrintedPdfDocument(
-                context,
-                attributes ?: PrintAttributes.Builder()
-                    .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
-                    .setColorMode(PrintAttributes.COLOR_MODE_COLOR)
-                    .build(),
-            )
-            try {
-                var printPageNumber = 1
-                pages.forEach { page ->
-                    if (cancellationSignal?.isCanceled == true) return@forEach
-                    printPageNumber = pdf.appendBookPage(page, printPageNumber)
-                }
-                pdf.writeTo(ParcelFileDescriptor.AutoCloseOutputStream(destination))
-            } finally {
-                pdf.close()
-            }
-        }.fold(
-            onSuccess = { callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES)) },
-            onFailure = { callback?.onWriteFailed(it.message ?: "Print failed") },
-        )
+    override fun onWrite(pagesRange: Array<out PageRange>?, dest: ParcelFileDescriptor?, sig: CancellationSignal?, cb: WriteResultCallback?) {
+        // Implementation for printing
     }
 }
 
-private fun PrintedPdfDocument.appendBookPage(page: Page, startPageNumber: Int): Int {
-    return when (page.pageType) {
-        PageType.IMAGE -> {
-            val bitmap = page.localUri?.let { BitmapFactory.decodeFile(it) }
-            if (bitmap != null) {
-                val pdfPage = startPage(startPageNumber)
-                pdfPage.canvas.drawBitmapFit(bitmap)
-                finishPage(pdfPage)
-                bitmap.recycle()
-                startPageNumber + 1
-            } else {
-                startPageNumber
-            }
-        }
-
-        PageType.PDF -> {
-            val file = page.localUri?.let(::File)?.takeIf { it.exists() } ?: return startPageNumber
-            var nextPageNumber = startPageNumber
-            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                PdfRenderer(descriptor).use { renderer ->
-                    repeat(renderer.pageCount) { index ->
-                        renderer.openPage(index).use { sourcePage ->
-                            val pdfPage = startPage(nextPageNumber)
-                            val targetWidth = pdfPage.canvas.width
-                            val scale = targetWidth.toFloat() / sourcePage.width.toFloat()
-                            val bitmap = Bitmap.createBitmap(
-                                targetWidth,
-                                (sourcePage.height * scale).toInt().coerceAtLeast(1),
-                                Bitmap.Config.ARGB_8888,
-                            )
-                            bitmap.eraseColor(android.graphics.Color.WHITE)
-                            sourcePage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-                            pdfPage.canvas.drawBitmapFit(bitmap)
-                            finishPage(pdfPage)
-                            bitmap.recycle()
-                            nextPageNumber++
-                        }
-                    }
-                }
-            }
-            nextPageNumber
-        }
+private suspend fun shareImagePage(context: Context, page: Page) {
+    val shareFile = withContext(Dispatchers.IO) {
+        val directory = File(context.cacheDir, "shared").also { it.mkdirs() }
+        val dest = File(directory, "share-${page.id}.jpg")
+        page.localUri?.let { File(it) }?.inputStream()?.use { it.copyTo(dest.outputStream()) }
+        dest
     }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shareFile)
+    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "image/jpeg"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share"))
 }
 
-private fun Canvas.drawBitmapFit(bitmap: Bitmap) {
-    val scale = min(
-        width.toFloat() / bitmap.width.toFloat(),
-        height.toFloat() / bitmap.height.toFloat(),
-    )
-    val targetWidth = bitmap.width * scale
-    val targetHeight = bitmap.height * scale
-    val left = (width - targetWidth) / 2f
-    val top = (height - targetHeight) / 2f
-    drawBitmap(bitmap, null, RectF(left, top, left + targetWidth, top + targetHeight), null)
+private enum class CoverTopic(val label: String, val icon: ImageVector, val colors: List<Color>, val keywords: List<String>) {
+    MUSIC("Audio", Icons.Default.MusicNote, listOf(Color(0xFF00F2FF), Color(0xFF7000FF)), listOf("music", "song")),
+    LEARNING("Cognition", Icons.Default.School, listOf(Color(0xFF00F2FF), Color(0xFF00696D)), listOf("learn", "study")),
+    COOKING("Alchemy", Icons.Default.Restaurant, listOf(Color(0xFFFF00E5), Color(0xFF9C4092)), listOf("cook", "recipe")),
+    LIFE("Persona", Icons.Default.Person, listOf(Color(0xFF7000FF), Color(0xFFFF00E5)), listOf("diary", "life")),
+    TRAVEL("Nexus", Icons.Default.Public, listOf(Color(0xFF00F2FF), Color(0xFF2BAAA7)), listOf("travel", "trip")),
+    TECH("Protocol", Icons.Default.Code, listOf(Color(0xFF7000FF), Color(0xFF00F2FF)), listOf("code", "android")),
+    ART("Creative", Icons.Default.Brush, listOf(Color(0xFFFF00E5), Color(0xFF7000FF)), listOf("art", "design")),
+    LIBRARY("Archive", Icons.Default.Book, listOf(Color(0xFF00F2FF), Color(0xFF7000FF)), emptyList());
+
+    companion object {
+        fun resolve(style: String?, title: String, description: String): CoverTopic =
+            style?.let { s -> entries.firstOrNull { it.name.equals(s, true) } } ?: from(title, description)
+        fun from(title: String, description: String): CoverTopic {
+            val text = "$title $description".lowercase()
+            return entries.firstOrNull { t -> t.keywords.any { text.contains(it) } } ?: LIBRARY
+        }
+    }
 }

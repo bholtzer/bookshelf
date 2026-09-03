@@ -23,7 +23,7 @@ fun googleWebClientId(): String =
 
 android {
     namespace = "com.bihstudio.bookshelf"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.bihstudio.bookshelf"
@@ -37,12 +37,16 @@ android {
 
     buildTypes {
         debug {
+            buildConfigField("String", "ENVIRONMENT", "\"development\"")
+            buildConfigField("boolean", "IS_PRODUCTION", "false")
             buildConfigField("boolean", "ENABLE_FIREBASE_APP_CHECK", "false")
         }
 
         release {
             isMinifyEnabled = false
-            buildConfigField("boolean", "ENABLE_FIREBASE_APP_CHECK", "false")
+            buildConfigField("String", "ENVIRONMENT", "\"production\"")
+            buildConfigField("boolean", "IS_PRODUCTION", "true")
+            buildConfigField("boolean", "ENABLE_FIREBASE_APP_CHECK", "true")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -127,4 +131,5 @@ dependencies {
 
     // Google Play deferred invite links
     implementation(libs.install.referrer)
+    implementation(libs.billing.client)
 }

@@ -78,4 +78,5 @@ abstract class RepositoryModule {
     @Binds @Singleton abstract fun bindAuthRepository(impl: AuthRepositoryImpl): AuthRepository
     @Binds @Singleton abstract fun bindBookRepository(impl: BookRepositoryImpl): BookRepository
     @Binds @Singleton abstract fun bindPageRepository(impl: PageRepositoryImpl): PageRepository
+    @Binds @Singleton abstract fun bindSubscriptionRepository(impl: PlaySubscriptionRepository): SubscriptionRepository
 }
