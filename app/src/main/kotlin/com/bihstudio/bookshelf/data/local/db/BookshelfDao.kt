@@ -51,6 +51,9 @@ interface BookDao {
     @Query("UPDATE books SET isSynced = 1 WHERE id = :bookId")
     suspend fun markSynced(bookId: String)
 
+    @Query("DELETE FROM books")
+    suspend fun deleteAllBooks()
+
     @Query("UPDATE books SET pageCount = :count, updatedAt = :updatedAt, isSynced = 0 WHERE id = :bookId")
     suspend fun updatePageCount(bookId: String, count: Int, updatedAt: Long)
 }

@@ -37,4 +37,7 @@ interface AuthRepository {
     suspend fun sendPasswordResetEmail(email: String): AppResult<Unit>
 
     suspend fun signOut(): AppResult<Unit>
+
+    /** Permanently deletes the signed-in account and all associated cloud/local data. */
+    suspend fun deleteAccount(): AppResult<Unit>
 }

@@ -2,6 +2,8 @@ package com.bihstudio.bookshelf.presentation.auth
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +32,7 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bihstudio.bookshelf.BuildConfig
+import com.bihstudio.bookshelf.presentation.legal.LegalUrls
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import kotlinx.coroutines.launch
@@ -260,9 +263,22 @@ fun AuthScreen(
                         "Already have an account? Sign in"
                 )
             }
+
+            Text(
+                "By continuing, you agree to the BI.H Terms and acknowledge the Privacy Policy.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Row(horizontalArrangement = Arrangement.Center) {
+                TextButton(onClick = { context.openLegalUrl(LegalUrls.TERMS) }) { Text("Terms") }
+                TextButton(onClick = { context.openLegalUrl(LegalUrls.PRIVACY) }) { Text("Privacy") }
+            }
         }
     }
 }
+
+private fun Context.openLegalUrl(url: String) = startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
 
 private fun Context.googleWebClientId(): String {
     if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()) {

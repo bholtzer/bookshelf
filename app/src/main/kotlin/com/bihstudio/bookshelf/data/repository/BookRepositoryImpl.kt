@@ -225,18 +225,15 @@ class BookRepositoryImpl @Inject constructor(
 
     override suspend fun deleteBook(bookId: String): AppResult<Unit> = runCatching {
         val book = bookDao.getBook(bookId)?.toDomain()
-        bookDao.deleteBook(bookId)
-        // Best-effort remote delete (silently ignore failure — WorkManager retries)
-        runCatching {
-            book?.ownerId?.let { ownerId ->
-                firestore.collection("users")
-                    .document(ownerId)
-                    .collection("books")
-                    .document(bookId)
-                    .delete()
-                    .await()
-            }
+        val ownerId = book?.ownerId
+        if (ownerId != null) {
+            val bookRef = booksCollection(ownerId).document(bookId)
+            val pages = bookRef.collection("pages").get().await()
+            for (page in pages.documents) page.reference.delete().await()
+            deleteStorageTree(storage.reference.child("users/$ownerId/books/$bookId"))
+            bookRef.delete().await()
         }
+        bookDao.deleteBook(bookId)
         Unit
     }.toAppResult()
 
@@ -394,6 +391,12 @@ class BookRepositoryImpl @Inject constructor(
         bitmap.recycle()
         return dest
     }
+}
+
+private suspend fun deleteStorageTree(reference: com.google.firebase.storage.StorageReference) {
+    val result = reference.listAll().await()
+    result.items.forEach { it.delete().await() }
+    result.prefixes.forEach { deleteStorageTree(it) }
 }
 
 private fun <T> Result<T>.toAppResult(): AppResult<T> =

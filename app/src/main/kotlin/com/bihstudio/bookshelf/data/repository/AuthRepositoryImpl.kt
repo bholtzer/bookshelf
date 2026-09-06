@@ -5,12 +5,16 @@ import com.bihstudio.bookshelf.domain.model.User
 import com.bihstudio.bookshelf.domain.model.extractEditorShareCode
 import com.bihstudio.bookshelf.domain.model.toEditorShareCode
 import com.bihstudio.bookshelf.domain.repository.AuthRepository
+import com.bihstudio.bookshelf.data.local.db.BookDao
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageReference
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -23,6 +27,8 @@ import javax.inject.Singleton
 class AuthRepositoryImpl @Inject constructor(
     private val firebaseAuth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
+    private val storage: FirebaseStorage,
+    private val bookDao: BookDao,
 ) : AuthRepository {
 
     override val currentUser: Flow<User?> = callbackFlow {
@@ -102,6 +108,37 @@ class AuthRepositoryImpl @Inject constructor(
         firebaseAuth.signOut()
     }.toAppResult()
 
+    override suspend fun deleteAccount(): AppResult<Unit> = runCatching {
+        val user = firebaseAuth.currentUser ?: error("Sign in again before deleting your account")
+        val uid = user.uid
+
+        // Remove files first; Firestore document deletion does not remove Storage objects.
+        deleteStorageTree(storage.reference.child("users/$uid"))
+
+        // Remove every page document before its parent book document.
+        val ownedBooks = firestore.collection("users").document(uid).collection("books").get().await()
+        for (book in ownedBooks.documents) {
+            val pages = book.reference.collection("pages").get().await()
+            for (page in pages.documents) page.reference.delete().await()
+            book.reference.delete().await()
+        }
+
+        // Remove outstanding invitations created by this account.
+        val invites = firestore.collection("bookInvites").whereEqualTo("ownerId", uid).get().await()
+        for (invite in invites.documents) invite.reference.delete().await()
+
+        // Revoke this user from books owned by other people.
+        val sharedBooks = firestore.collectionGroup("books").whereArrayContains("sharedEditorIds", uid).get().await()
+        for (book in sharedBooks.documents) {
+            book.reference.update("sharedEditorIds", FieldValue.arrayRemove(uid)).await()
+        }
+
+        firestore.collection("users").document(uid).delete().await()
+        bookDao.deleteAllBooks()
+        user.delete().await()
+        firebaseAuth.signOut()
+    }.toAppResult()
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -148,6 +185,12 @@ class AuthRepositoryImpl @Inject constructor(
             .document(user.uid)
             .set(data, SetOptions.merge())
     }
+}
+
+private suspend fun deleteStorageTree(reference: StorageReference) {
+    val result = reference.listAll().await()
+    result.items.forEach { it.delete().await() }
+    result.prefixes.forEach { deleteStorageTree(it) }
 }
 
 // ── Extension helpers ─────────────────────────────────────────────────────────

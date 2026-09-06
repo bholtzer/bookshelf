@@ -23,12 +23,12 @@ fun googleWebClientId(): String =
 
 android {
     namespace = "com.bihstudio.bookshelf"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.bihstudio.bookshelf"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

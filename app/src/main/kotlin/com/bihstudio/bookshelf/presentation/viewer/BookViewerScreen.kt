@@ -25,6 +25,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -142,6 +144,7 @@ fun BookViewerScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var currentPageIndex by remember { mutableIntStateOf(0) }
+    var isFullPage by rememberSaveable { mutableStateOf(false) }
     
     val readerPages by produceState<List<ReaderPage>>(initialValue = emptyList(), state.pages) {
         value = buildReaderPages(state.pages)
@@ -158,6 +161,7 @@ fun BookViewerScreen(
     Scaffold(
         containerColor = Color(0xFF050B18),
         topBar = {
+          if (!isFullPage) {
             TopAppBar(
                 title = {
                     Column {
@@ -189,6 +193,7 @@ fun BookViewerScreen(
                     titleContentColor = Color.White,
                 ),
             )
+          }
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
@@ -210,13 +215,15 @@ fun BookViewerScreen(
                     Column(Modifier.fillMaxSize()) {
                         HorizontalPager(
                             state = pagerState,
-                            contentPadding = PaddingValues(horizontal = 30.dp, vertical = 24.dp),
-                            pageSpacing = 20.dp,
+                            contentPadding = if (isFullPage) PaddingValues(0.dp) else PaddingValues(horizontal = 30.dp, vertical = 24.dp),
+                            pageSpacing = if (isFullPage) 0.dp else 20.dp,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         ) { index ->
                             val pageOffset = (pagerState.currentPage - index + pagerState.currentPageOffsetFraction).coerceIn(-1f, 1f)
                             PageSurface(
                                 readerPage = readerPages[index],
+                                isFullPage = isFullPage,
+                                onToggleFullPage = { isFullPage = !isFullPage },
                                 modifier = Modifier.graphicsLayer {
                                     val absOffset = kotlin.math.abs(pageOffset)
                                     rotationY = pageOffset * 30f
@@ -229,7 +236,7 @@ fun BookViewerScreen(
                             )
                         }
                         
-                        Column(
+                        if (!isFullPage) Column(
                             Modifier.fillMaxWidth().padding(start = 40.dp, end = 40.dp, bottom = 48.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
@@ -377,21 +384,23 @@ private fun HiTechBackdrop() {
 }
 
 @Composable
-private fun PageSurface(readerPage: ReaderPage, modifier: Modifier = Modifier) {
+private fun PageSurface(readerPage: ReaderPage, isFullPage: Boolean, onToggleFullPage: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = if (isFullPage) RoundedCornerShape(0.dp) else RoundedCornerShape(topStart = 3.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 3.dp)
     Box(
         modifier
             .fillMaxSize()
             .shadow(
-                elevation = 32.dp,
-                shape = RoundedCornerShape(16.dp),
-                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                elevation = if (isFullPage) 0.dp else 32.dp,
+                shape = shape,
+                spotColor = Color.Black.copy(alpha = 0.65f)
             )
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF0D1424))
-            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+            .clip(shape)
+            .background(if (isFullPage) Color.Black else Color(0xFFFFF9E9))
+            .then(if (isFullPage) Modifier else Modifier.border(1.dp, Color(0xFFB59463), shape))
+            .clickable(onClickLabel = if (isFullPage) "Exit full page" else "View full page", onClick = onToggleFullPage)
     ) {
         Box(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
+            modifier = Modifier.fillMaxSize().padding(if (isFullPage) PaddingValues(0.dp) else PaddingValues(start = 22.dp, top = 18.dp, end = 20.dp, bottom = 22.dp)),
             contentAlignment = Alignment.Center
         ) {
             when (readerPage.page.pageType) {
@@ -400,13 +409,13 @@ private fun PageSurface(readerPage: ReaderPage, modifier: Modifier = Modifier) {
             }
         }
         
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    listOf(Color.White.copy(alpha = 0.05f), Color.Transparent, Color.Black.copy(alpha = 0.1f))
-                )
-            )
-        )
+        if (!isFullPage) {
+            // Reference-inspired binding gutter and gently curved paper lighting.
+            Box(Modifier.fillMaxHeight().width(20.dp).align(Alignment.CenterStart).background(Brush.horizontalGradient(listOf(Color(0xFF6F4B28).copy(alpha = 0.4f), Color(0xFFD7BE91).copy(alpha = 0.3f), Color.Transparent))))
+            Box(Modifier.fillMaxHeight().width(9.dp).align(Alignment.CenterEnd).background(Brush.horizontalGradient(listOf(Color.Transparent, Color(0xFFB89865).copy(alpha = 0.42f)))))
+            Box(Modifier.fillMaxWidth().height(8.dp).align(Alignment.BottomCenter).background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xFFB89865).copy(alpha = 0.5f)))))
+            Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.Transparent, Color(0xFF8A6237).copy(alpha = 0.12f)), radius = 900f)))
+        }
     }
 }
 

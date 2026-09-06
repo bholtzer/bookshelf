@@ -20,6 +20,12 @@ class GetCurrentUserUseCase @Inject constructor(
     operator fun invoke(): User? = authRepository.getCurrentUserSnapshot()
 }
 
+class DeleteAccountUseCase @Inject constructor(
+    private val authRepository: AuthRepository,
+) {
+    suspend operator fun invoke(): AppResult<Unit> = authRepository.deleteAccount()
+}
+
 class SignInWithGoogleUseCase @Inject constructor(
     private val authRepository: AuthRepository,
 ) {

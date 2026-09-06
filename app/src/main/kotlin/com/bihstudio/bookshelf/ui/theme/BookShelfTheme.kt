@@ -7,24 +7,24 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val HiTechDarkColors = darkColorScheme(
-    primary = Color(0xFF00F2FF), // Neon Cyan
-    onPrimary = Color(0xFF003739),
-    primaryContainer = Color(0xFF004F52),
-    onPrimaryContainer = Color(0xFF97F3F6),
-    secondary = Color(0xFFFF00E5), // Neon Magenta
-    onSecondary = Color(0xFF4B0043),
-    secondaryContainer = Color(0xFF6B0061),
-    onSecondaryContainer = Color(0xFFFFD7F3),
-    tertiary = Color(0xFF7000FF), // Electric Purple
+private val BookIconDarkColors = darkColorScheme(
+    primary = Color(0xFF42A5F5),
+    onPrimary = Color(0xFF06284A),
+    primaryContainer = Color(0xFF174F87),
+    onPrimaryContainer = Color(0xFFD7ECFF),
+    secondary = Color(0xFFFFB51B),
+    onSecondary = Color(0xFF3D2900),
+    secondaryContainer = Color(0xFF704B00),
+    onSecondaryContainer = Color(0xFFFFE2A6),
+    tertiary = Color(0xFF78C943),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFF4B00B0),
-    onTertiaryContainer = Color(0xFFEDDCFF),
-    background = Color(0xFF050B18), // Deep Space Blue
+    tertiaryContainer = Color(0xFF356B18),
+    onTertiaryContainer = Color(0xFFD9FFC2),
+    background = Color(0xFF07182E),
     onBackground = Color(0xFFE1E2E5),
-    surface = Color(0xFF0D1424),
+    surface = Color(0xFF102A49),
     onSurface = Color(0xFFE1E2E5),
-    surfaceVariant = Color(0xFF1B263B),
+    surfaceVariant = Color(0xFF1A3B60),
     onSurfaceVariant = Color(0xFFC1C7CE),
     outline = Color(0xFF8B9199),
 )
@@ -56,7 +56,6 @@ fun BookShelfTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    // Forcing Hi-Tech Dark as the primary experience for "Hi-Tech" feel
-    val colorScheme = if (darkTheme) HiTechDarkColors else HiTechDarkColors
+    val colorScheme = if (darkTheme) BookIconDarkColors else BookIconDarkColors
     MaterialTheme(colorScheme = colorScheme, content = content)
 }
