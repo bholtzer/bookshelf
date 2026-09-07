@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.bihstudio.madafim",
+      "sha256_cert_fingerprints": [
+        "F1:97:4E:1B:76:EF:86:B2:A2:E4:37:73:10:6C:44:BC:69:12:43:8C:2C:87:DD:D0:D3:05:A1:CC:63:7C:41:50"
+      ]
+    }
+  }
+]

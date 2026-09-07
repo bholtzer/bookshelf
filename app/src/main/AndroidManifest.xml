@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
-        android:name=".BookShelfApplication"
+        android:name="BookShelfApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -14,7 +14,7 @@
         android:theme="@style/Theme.BookShelf">
 
         <activity
-            android:name=".MainActivity"
+            android:name="MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
@@ -30,7 +30,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="bookshelf"
+                    android:scheme="madafim"
                     android:host="book-invite" />
             </intent-filter>
 
@@ -73,14 +73,14 @@
                 <data android:mimeType="application/pdf" />
             </intent-filter>
 
-            <!-- Open image files directly into BookShelf from apps like WhatsApp -->
+            <!-- Open image files directly into MaDaFim from apps like WhatsApp -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
 
-            <!-- Open PDF files directly into BookShelf from apps like WhatsApp -->
+            <!-- Open PDF files directly into MaDaFim from apps like WhatsApp -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

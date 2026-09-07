@@ -41,6 +41,43 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:429064841461:android:1410ace26e47e8a49abdbc",
+        "android_client_info": {
+          "package_name": "com.bihstudio.madafim"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "429064841461-6k2mcg9oeq18jied9ao7acduhbl3hltd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.bihstudio.madafim",
+            "certificate_hash": "3e117a6706ffc06dc7f2c75b529d24fd7c1e6786"
+          }
+        },
+        {
+          "client_id": "429064841461-t1pokdsavkvu5ajemh73fkuvn69pf53v.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA6A-kAETuFs0wrgIIU1W6fqyqiEWro0vk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "429064841461-t1pokdsavkvu5ajemh73fkuvn69pf53v.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"

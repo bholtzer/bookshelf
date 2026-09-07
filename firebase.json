@@ -1,0 +1,31 @@
+{
+  "hosting": {
+    "public": "hosting",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/book-invite/**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/.well-known/assetlinks.json",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=300"
+          }
+        ]
+      }
+    ]
+  }
+}

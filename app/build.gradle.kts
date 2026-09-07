@@ -22,11 +22,11 @@ fun googleWebClientId(): String =
         ?: ""
 
 android {
-    namespace = "com.bihstudio.bookshelf"
+    namespace = "com.bihstudio.madafim"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.bihstudio.bookshelf"
+        applicationId = "com.bihstudio.madafim"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

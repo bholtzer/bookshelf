@@ -23,5 +23,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "BookShelf"
+rootProject.name = "MaDaFim"
 include(":app")
