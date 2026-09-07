@@ -7,8 +7,8 @@ import androidx.navigation.compose.composable
 import com.bihstudio.madafim.domain.analytics.AnalyticsEvent
 import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
 import com.bihstudio.madafim.domain.analytics.AnalyticsParam
-import com.bihstudio.madafim.presentation.auth.AuthScreen
 import com.bihstudio.madafim.presentation.account.AccountScreen
+import com.bihstudio.madafim.presentation.auth.AuthScreen
 import com.bihstudio.madafim.presentation.bookshelf.BookShelfScreen
 import com.bihstudio.madafim.presentation.detail.BookDetailScreen
 import com.bihstudio.madafim.presentation.opening.OpeningScreen

@@ -17,11 +17,11 @@ import com.bihstudio.madafim.domain.model.SubscriptionPlan
 import com.bihstudio.madafim.domain.model.SubscriptionState
 import com.bihstudio.madafim.domain.repository.SubscriptionRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
-import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import javax.inject.Inject
+import javax.inject.Singleton
 
 @Singleton
 class PlaySubscriptionRepository @Inject constructor(

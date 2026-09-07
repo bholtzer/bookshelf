@@ -12,8 +12,8 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import com.bihstudio.madafim.data.local.db.BookDao
 import com.bihstudio.madafim.data.local.model.BookEntity
-import com.bihstudio.madafim.data.local.model.toEntity
 import com.bihstudio.madafim.data.local.model.toDomain
+import com.bihstudio.madafim.data.local.model.toEntity
 import com.bihstudio.madafim.data.remote.SyncWorker
 import com.bihstudio.madafim.domain.model.AppResult
 import com.bihstudio.madafim.domain.model.Book
@@ -22,9 +22,9 @@ import com.bihstudio.madafim.domain.model.toBookInviteCode
 import com.bihstudio.madafim.domain.model.toBookInviteWebLink
 import com.bihstudio.madafim.domain.repository.BookRepository
 import com.bihstudio.madafim.domain.repository.PageRepository
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.google.firebase.storage.FirebaseStorage

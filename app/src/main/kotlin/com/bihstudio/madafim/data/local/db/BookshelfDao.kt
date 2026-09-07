@@ -1,6 +1,10 @@
 package com.bihstudio.madafim.data.local.db
 
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Update
 import com.bihstudio.madafim.data.local.model.BookEntity
 import com.bihstudio.madafim.data.local.model.PageEntity
 import kotlinx.coroutines.flow.Flow

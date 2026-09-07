@@ -5,8 +5,8 @@ import android.net.Uri
 import com.bihstudio.madafim.data.local.db.BookDao
 import com.bihstudio.madafim.data.local.db.PageDao
 import com.bihstudio.madafim.data.local.model.PageEntity
-import com.bihstudio.madafim.data.local.model.toEntity
 import com.bihstudio.madafim.data.local.model.toDomain
+import com.bihstudio.madafim.data.local.model.toEntity
 import com.bihstudio.madafim.data.local.model.toRemovalSuggestionIdStorage
 import com.bihstudio.madafim.data.remote.SyncWorker
 import com.bihstudio.madafim.domain.model.AppResult

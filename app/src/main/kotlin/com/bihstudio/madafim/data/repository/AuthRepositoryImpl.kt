@@ -1,18 +1,18 @@
 package com.bihstudio.madafim.data.repository
 
+import com.bihstudio.madafim.data.local.db.BookDao
 import com.bihstudio.madafim.domain.model.AppResult
 import com.bihstudio.madafim.domain.model.User
 import com.bihstudio.madafim.domain.model.extractEditorShareCode
 import com.bihstudio.madafim.domain.model.toEditorShareCode
 import com.bihstudio.madafim.domain.repository.AuthRepository
-import com.bihstudio.madafim.data.local.db.BookDao
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.UserProfileChangeRequest
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.storage.StorageReference
 import kotlinx.coroutines.channels.awaitClose
