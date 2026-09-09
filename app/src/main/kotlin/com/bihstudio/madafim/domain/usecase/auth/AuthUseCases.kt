@@ -37,9 +37,13 @@ class SignInWithEmailPasswordUseCase @Inject constructor(
     private val authRepository: AuthRepository,
 ) {
     suspend operator fun invoke(email: String, password: String): AppResult<User> {
-        if (email.isBlank()) return AppResult.Error("Email cannot be empty")
+        val normalizedEmail = email.trim()
+        if (normalizedEmail.isBlank()) return AppResult.Error("Email cannot be empty")
+        if (!normalizedEmail.isValidEmail()) {
+            return AppResult.Error("Enter a valid email address, for example name@example.com")
+        }
         if (password.length < 6) return AppResult.Error("Password must be at least 6 characters")
-        return authRepository.signInWithEmailPassword(email, password)
+        return authRepository.signInWithEmailPassword(normalizedEmail, password)
     }
 }
 
@@ -52,11 +56,23 @@ class RegisterWithEmailPasswordUseCase @Inject constructor(
         displayName: String,
     ): AppResult<User> {
         if (displayName.isBlank()) return AppResult.Error("Display name cannot be empty")
-        if (email.isBlank()) return AppResult.Error("Email cannot be empty")
+        val normalizedEmail = email.trim()
+        if (normalizedEmail.isBlank()) return AppResult.Error("Email cannot be empty")
+        if (!normalizedEmail.isValidEmail()) {
+            return AppResult.Error("Enter a valid email address, for example name@example.com")
+        }
         if (password.length < 6) return AppResult.Error("Password must be at least 6 characters")
-        return authRepository.registerWithEmailPassword(email, password, displayName)
+        return authRepository.registerWithEmailPassword(normalizedEmail, password, displayName.trim())
     }
 }
+
+private val EMAIL_PATTERN = Regex(
+    pattern = "^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$",
+    option = RegexOption.IGNORE_CASE,
+)
+
+private fun String.isValidEmail(): Boolean =
+    length <= 254 && '\\' !in this && EMAIL_PATTERN.matches(this)
 
 class SignOutUseCase @Inject constructor(
     private val authRepository: AuthRepository,

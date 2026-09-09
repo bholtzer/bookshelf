@@ -35,6 +35,22 @@ android {
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId()}\"")
     }
 
+    signingConfigs {
+        create("release") {
+            // Set these in ~/.gradle/gradle.properties or environment variables.
+            // Missing values allow debug builds; release signing requires all four.
+            fun signingValue(name: String): String? =
+                providers.gradleProperty(name).orNull
+                    ?: providers.environmentVariable(name).orNull
+
+            storeFile = signingValue("RELEASE_STORE_FILE")?.let { rootProject.file(it) }
+            storePassword = signingValue("RELEASE_STORE_PASSWORD")
+            keyAlias = signingValue("RELEASE_KEY_ALIAS")
+            keyPassword = signingValue("RELEASE_KEY_PASSWORD")
+
+        }
+    }
+
     buildTypes {
         debug {
             buildConfigField("String", "ENVIRONMENT", "\"development\"")
@@ -43,6 +59,7 @@ android {
         }
 
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             buildConfigField("String", "ENVIRONMENT", "\"production\"")
             buildConfigField("boolean", "IS_PRODUCTION", "true")
