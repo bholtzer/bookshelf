@@ -56,6 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
+import com.bihstudio.madafim.domain.analytics.AnalyticsEvent
+import com.bihstudio.madafim.domain.analytics.AnalyticsParam
 import com.bihstudio.madafim.domain.model.AppResult
 import com.bihstudio.madafim.domain.usecase.auth.DeleteAccountUseCase
 import com.bihstudio.madafim.domain.usecase.auth.GetCurrentUserUseCase
@@ -81,13 +84,26 @@ class AccountViewModel @Inject constructor(
     getCurrentUser: GetCurrentUserUseCase,
     private val deleteAccount: DeleteAccountUseCase,
     private val signOutUseCase: SignOutUseCase,
+    private val analytics: AnalyticsLogger,
 ) : ViewModel() {
     private val user = getCurrentUser()
     private val _state = MutableStateFlow(AccountUiState(user?.displayName.orEmpty(), user?.email.orEmpty()))
     val state = _state.asStateFlow()
 
+    fun trackExternalLink(destination: String) {
+        analytics.track(AnalyticsEvent.EXTERNAL_LINK_OPENED, mapOf(AnalyticsParam.SOURCE to "account", "destination" to destination))
+    }
+
+    private fun trackAccountResult(event: String, success: Boolean) {
+        analytics.track(event, mapOf(AnalyticsParam.RESULT to if (success) "success" else "failure"))
+        if (success) analytics.setUserId(null)
+    }
+
     fun signOut() = viewModelScope.launch {
-        when (val result = signOutUseCase()) {
+        analytics.track(AnalyticsEvent.ACCOUNT_SIGN_OUT_STARTED)
+        val result = signOutUseCase()
+        trackAccountResult(AnalyticsEvent.ACCOUNT_SIGN_OUT_RESULT, result is AppResult.Success)
+        when (result) {
             is AppResult.Success -> _state.update { it.copy(signedOut = true) }
             is AppResult.Error -> _state.update { it.copy(error = result.message) }
         }
@@ -95,7 +111,10 @@ class AccountViewModel @Inject constructor(
 
     fun deletePermanently() = viewModelScope.launch {
         _state.update { it.copy(isDeleting = true, error = null) }
-        when (val result = deleteAccount()) {
+        analytics.track(AnalyticsEvent.ACCOUNT_DELETE_STARTED)
+        val result = deleteAccount()
+        trackAccountResult(AnalyticsEvent.ACCOUNT_DELETE_RESULT, result is AppResult.Success)
+        when (result) {
             is AppResult.Success -> _state.update { it.copy(isDeleting = false, signedOut = true) }
             is AppResult.Error -> _state.update { it.copy(isDeleting = false, error = result.message) }
         }
@@ -134,11 +153,11 @@ fun AccountScreen(
             Spacer(Modifier.height(8.dp))
 
             AccountAction(Icons.Default.WorkspacePremium, "MaDaFim Pro", "View plans and benefits", onUpgrade)
-            AccountAction(Icons.Default.ManageAccounts, "Manage subscription", "Cancel or manage billing in Google Play", onClick = { context.openUrl(LegalUrls.MANAGE_SUBSCRIPTIONS) })
+            AccountAction(Icons.Default.ManageAccounts, "Manage subscription", "Cancel or manage billing in Google Play", onClick = { viewModel.trackExternalLink("manage_subscriptions"); context.openUrl(LegalUrls.MANAGE_SUBSCRIPTIONS) })
             HorizontalDivider()
-            AccountAction(Icons.Default.PrivacyTip, "Privacy Policy", "How BI.H handles your data", onClick = { context.openUrl(LegalUrls.PRIVACY) })
-            AccountAction(Icons.Default.Description, "Terms and Conditions", "Rules for using MaDaFim", onClick = { context.openUrl(LegalUrls.TERMS) })
-            AccountAction(Icons.Default.DeleteOutline, "Online deletion information", "Delete without access to the app", onClick = { context.openUrl(LegalUrls.DELETE_ACCOUNT) })
+            AccountAction(Icons.Default.PrivacyTip, "Privacy Policy", "How BI.H handles your data", onClick = { viewModel.trackExternalLink("privacy"); context.openUrl(LegalUrls.PRIVACY) })
+            AccountAction(Icons.Default.Description, "Terms and Conditions", "Rules for using MaDaFim", onClick = { viewModel.trackExternalLink("terms"); context.openUrl(LegalUrls.TERMS) })
+            AccountAction(Icons.Default.DeleteOutline, "Online deletion information", "Delete without access to the app", onClick = { viewModel.trackExternalLink("delete_account"); context.openUrl(LegalUrls.DELETE_ACCOUNT) })
             HorizontalDivider()
             AccountAction(Icons.Default.Logout, "Sign out", "Keep cloud data and sign out on this device", viewModel::signOut)
             AccountAction(Icons.Default.DeleteForever, "Delete account and data", "Permanently removes your account, books, pages and cloud files", { confirmDelete = true }, destructive = true)

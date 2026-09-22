@@ -21,9 +21,11 @@ import javax.inject.Inject
 
 data class AuthUiState(
     val isLoading: Boolean = false,
+    val isGoogleSignInInProgress: Boolean = false,
     val isSignedIn: Boolean = false,
     val error: String? = null,
     val mode: AuthMode = AuthMode.SIGN_IN,
+    val modeHistory: List<AuthMode> = emptyList(),
 )
 
 enum class AuthMode { SIGN_IN, REGISTER }
@@ -40,22 +42,30 @@ class AuthViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(AuthUiState())
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
 
-    init {
-        analytics.trackScreen("auth")
+    fun trackExternalLink(destination: String) {
+        analytics.track(AnalyticsEvent.EXTERNAL_LINK_OPENED, mapOf(AnalyticsParam.SOURCE to "auth", "destination" to destination))
+    }
+
+    fun onGoogleSignInStarted(): Boolean {
+        if (_uiState.value.isLoading) return false
+        _uiState.update { it.copy(isLoading = true, isGoogleSignInInProgress = true, error = null) }
+        analytics.track(AnalyticsEvent.AUTH_GOOGLE_STARTED, mapOf(AnalyticsParam.AUTH_METHOD to "google"))
+        return true
+    }
+
+    fun onGoogleCredentialFailure(result: String, message: String? = null) {
+        _uiState.update { it.copy(isLoading = false, isGoogleSignInInProgress = false, error = message) }
+        analytics.trackAuthResult(AnalyticsEvent.AUTH_GOOGLE_RESULT, "google", result)
     }
 
     fun onGoogleIdTokenReceived(idToken: String) {
         viewModelScope.launch {
-            analytics.track(
-                AnalyticsEvent.AUTH_GOOGLE_STARTED,
-                mapOf(AnalyticsParam.AUTH_METHOD to "google"),
-            )
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val result = signInWithGoogle(idToken)) {
                 is AppResult.Success -> finishSignIn(result.data.uid, "google")
                 is AppResult.Error -> {
                     analytics.trackAuthResult(AnalyticsEvent.AUTH_GOOGLE_RESULT, "google", "failure")
-                    _uiState.update { it.copy(isLoading = false, error = result.message) }
+                    _uiState.update { it.copy(isLoading = false, isGoogleSignInInProgress = false, error = result.message) }
                 }
             }
         }
@@ -99,20 +109,21 @@ class AuthViewModel @Inject constructor(
         analytics.setUserId(userId)
         analytics.trackAuthResult(method.toAuthResultEvent(), method, "success")
         _uiState.update {
-            it.copy(isLoading = false, isSignedIn = true, error = null)
+            it.copy(isLoading = false, isGoogleSignInInProgress = false, isSignedIn = true, error = null)
         }
 
         val restore = withTimeoutOrNull(8_000) {
             restoreUserLibrary(userId)
         }
         when (restore) {
-            null -> analytics.trackAuthResult(method.toAuthResultEvent(), method, "restore_timeout")
-            is AppResult.Error -> analytics.trackAuthResult(method.toAuthResultEvent(), method, "restore_failure")
-            is AppResult.Success -> Unit
+            null -> analytics.trackAuthResult(AnalyticsEvent.LIBRARY_RESTORE_RESULT, method, "timeout")
+            is AppResult.Error -> analytics.trackAuthResult(AnalyticsEvent.LIBRARY_RESTORE_RESULT, method, "failure")
+            is AppResult.Success -> analytics.trackAuthResult(AnalyticsEvent.LIBRARY_RESTORE_RESULT, method, "success")
         }
     }
 
     fun toggleMode() {
+        if (_uiState.value.isLoading) return
         _uiState.update {
             val nextMode = if (it.mode == AuthMode.SIGN_IN) AuthMode.REGISTER else AuthMode.SIGN_IN
             analytics.track(
@@ -121,6 +132,18 @@ class AuthViewModel @Inject constructor(
             )
             it.copy(
                 mode  = nextMode,
+                modeHistory = it.modeHistory + it.mode,
+                error = null,
+            )
+        }
+    }
+
+    fun onBack() {
+        _uiState.update { state ->
+            val previousMode = state.modeHistory.lastOrNull() ?: return@update state
+            state.copy(
+                mode = previousMode,
+                modeHistory = state.modeHistory.dropLast(1),
                 error = null,
             )
         }

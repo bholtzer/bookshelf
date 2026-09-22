@@ -44,7 +44,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        analytics.track(AnalyticsEvent.APP_OPENED)
+        analytics.setUserId(getCurrentUser()?.uid)
+        if (savedInstanceState == null) analytics.track(AnalyticsEvent.APP_OPENED)
         handleIncomingIntent(intent)
         loadDeferredBookInvite()
 
@@ -141,6 +142,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setPendingBookInvite(inviteText: String) {
+        analytics.track(AnalyticsEvent.INVITE_RECEIVED)
         pendingInitialBookInvite = inviteText
         pendingBookInviteState?.value = inviteText
     }

@@ -67,9 +67,11 @@ class PaywallViewModel @Inject constructor(
     val state = subscriptions.state
 
     init {
-        analytics.trackScreen("pro_paywall")
-        analytics.track(AnalyticsEvent.PAYWALL_VIEWED)
         subscriptions.refresh()
+    }
+
+    fun trackExternalLink(destination: String) {
+        analytics.track(AnalyticsEvent.EXTERNAL_LINK_OPENED, mapOf(AnalyticsParam.SOURCE to "paywall", "destination" to destination))
     }
 
     fun purchase(activity: Activity, offer: SubscriptionOffer) {
@@ -170,10 +172,10 @@ fun PaywallScreen(
                 }
             }
             Text("Subscriptions renew automatically until cancelled in Google Play.", color = Color.White.copy(alpha = 0.4f), style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
-            OutlinedButton(onClick = { context.openUrl(LegalUrls.MANAGE_SUBSCRIPTIONS) }, modifier = Modifier.fillMaxWidth()) { Text("Manage or cancel subscription") }
+            OutlinedButton(onClick = { viewModel.trackExternalLink("manage_subscriptions"); context.openUrl(LegalUrls.MANAGE_SUBSCRIPTIONS) }, modifier = Modifier.fillMaxWidth()) { Text("Manage or cancel subscription") }
             Row(horizontalArrangement = Arrangement.Center) {
-                TextButton(onClick = { context.openUrl(LegalUrls.TERMS) }) { Text("Terms") }
-                TextButton(onClick = { context.openUrl(LegalUrls.PRIVACY) }) { Text("Privacy") }
+                TextButton(onClick = { viewModel.trackExternalLink("terms"); context.openUrl(LegalUrls.TERMS) }) { Text("Terms") }
+                TextButton(onClick = { viewModel.trackExternalLink("privacy"); context.openUrl(LegalUrls.PRIVACY) }) { Text("Privacy") }
             }
         }
     }

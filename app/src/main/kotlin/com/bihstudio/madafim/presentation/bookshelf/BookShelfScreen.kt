@@ -100,6 +100,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.bihstudio.madafim.domain.analytics.AnalyticsEvent
+import com.bihstudio.madafim.domain.analytics.AnalyticsParam
 import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
 import com.bihstudio.madafim.domain.model.AppResult
 import com.bihstudio.madafim.domain.model.Book
@@ -167,12 +169,18 @@ class BookShelfViewModel @Inject constructor(
         } else {
             analytics.setUserId(user.uid)
             viewModelScope.launch {
-                restoreUserLibrary(user.uid)
+                val result = restoreUserLibrary(user.uid)
+                analytics.track(AnalyticsEvent.LIBRARY_RESTORE_RESULT, mapOf(AnalyticsParam.SOURCE to "shelf", AnalyticsParam.RESULT to if (result is AppResult.Success) "success" else "failure"))
             }
             viewModelScope.launch {
                 observeBooks(user.uid)
                     .flatMapLatest { books -> books.withCoverPages(user.editorShareCode) }
-                    .collect { nextState -> _state.value = nextState }
+                    .collect { nextState ->
+                        if (_state.value.isLoading || _state.value.books.size != nextState.books.size) {
+                            analytics.track(AnalyticsEvent.SHELF_LOADED, mapOf(AnalyticsParam.BOOK_COUNT to nextState.books.size))
+                        }
+                        _state.value = nextState
+                    }
             }
         }
     }
@@ -180,24 +188,41 @@ class BookShelfViewModel @Inject constructor(
     fun createBook(title: String, description: String) {
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
-            createBook(user.uid, title, description)
+            analytics.track(AnalyticsEvent.BOOK_CREATE_STARTED, mapOf(AnalyticsParam.SOURCE to "shelf"))
+            val result = createBook(user.uid, title, description)
+            analytics.track(AnalyticsEvent.BOOK_CREATE_RESULT, mapOf(
+                AnalyticsParam.SOURCE to "shelf",
+                AnalyticsParam.HAS_DESCRIPTION to description.isNotBlank(),
+                AnalyticsParam.RESULT to if (result is AppResult.Success) "success" else "failure",
+            ))
         }
     }
 
     fun joinSharedBook(inviteText: String, onJoined: (String) -> Unit) {
         val user = getCurrentUser() ?: return
         viewModelScope.launch {
+            analytics.track(AnalyticsEvent.INVITE_JOIN_STARTED)
             _state.update { it.copy(isJoiningInvite = true, joinInviteError = null) }
             when (val result = acceptBookEditorInvite(inviteText, user.uid)) {
                 is AppResult.Error -> {
+                    analytics.track(AnalyticsEvent.INVITE_JOIN_RESULT, mapOf(AnalyticsParam.RESULT to "failure"))
                     _state.update { it.copy(isJoiningInvite = false, joinInviteError = result.message) }
                 }
                 is AppResult.Success -> {
+                    analytics.track(AnalyticsEvent.INVITE_JOIN_RESULT, mapOf(AnalyticsParam.RESULT to "success"))
                     _state.update { it.copy(isJoiningInvite = false, joinInviteError = null) }
                     onJoined(result.data.id)
                 }
             }
         }
+    }
+
+    fun trackSearch(resultCount: Int) {
+        analytics.track(AnalyticsEvent.SHELF_SEARCHED, mapOf(AnalyticsParam.BOOK_COUNT to resultCount))
+    }
+
+    fun trackLayout(layout: String) {
+        analytics.track(AnalyticsEvent.SHELF_LAYOUT_CHANGED, mapOf(AnalyticsParam.STYLE to layout))
     }
 
     private fun List<Book>.withCoverPages(editorShareCode: String): Flow<BookShelfUiState> {
@@ -237,6 +262,13 @@ fun BookShelfScreen(
         }
     }
 
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotBlank() && inviteCodeFromSearch == null) {
+            delay(600)
+            viewModel.trackSearch(visibleBooks.size)
+        }
+    }
+
     LaunchedEffect(pendingInviteText) {
         if (!pendingInviteText.isNullOrBlank()) {
             initialJoinText = pendingInviteText
@@ -272,7 +304,7 @@ fun BookShelfScreen(
                     verticalArrangement = Arrangement.spacedBy(28.dp),
                 ) {
                     item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                        MusicAppHeader(state.books.size, shelfLayout, { shelfLayoutName = it.name }, { showJoinDialog = true }, onAccount)
+                        MusicAppHeader(state.books.size, shelfLayout, { shelfLayoutName = it.name; viewModel.trackLayout(it.name.lowercase()) }, { showJoinDialog = true }, onAccount)
                     }
                     item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
                         LibrarySearchField(searchQuery, { searchQuery = it }, inviteCodeFromSearch != null)
@@ -295,7 +327,7 @@ fun BookShelfScreen(
                     contentPadding = PaddingValues(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    item { MusicAppHeader(state.books.size, shelfLayout, { shelfLayoutName = it.name }, { showJoinDialog = true }, onAccount) }
+                    item { MusicAppHeader(state.books.size, shelfLayout, { shelfLayoutName = it.name; viewModel.trackLayout(it.name.lowercase()) }, { showJoinDialog = true }, onAccount) }
                     item { LibrarySearchField(searchQuery, { searchQuery = it }, inviteCodeFromSearch != null) }
                     if (inviteCodeFromSearch != null) {
                         item { InviteSearchCard(inviteCodeFromSearch, state.isJoiningInvite, state.joinInviteError, { viewModel.joinSharedBook(searchQuery) { searchQuery = ""; onEditBook(it) } }, { searchQuery = "" }) }
@@ -577,7 +609,7 @@ private fun BookDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Uni
 @Composable
 private fun MiniShelf() { /* Placeholder for compatibility */ }
 
-private const val FREE_BOOK_LIMIT = 3
+private const val FREE_BOOK_LIMIT = 5
 
 private enum class CoverTopic(val label: String, val icon: ImageVector, val colors: List<Color>, val keywords: List<String>) {
     MUSIC("Music", Icons.Default.MusicNote, listOf(Color(0xFF238BE4), Color(0xFF1764BD)), listOf("music", "song")),

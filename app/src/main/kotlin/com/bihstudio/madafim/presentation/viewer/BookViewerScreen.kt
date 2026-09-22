@@ -157,10 +157,14 @@ class BookViewerViewModel @Inject constructor(
     private val _state = MutableStateFlow(BookViewerUiState())
     val uiState: StateFlow<BookViewerUiState> = _state.asStateFlow()
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+    private var loadedBookId: String? = null
+
     fun load(bookId: String) {
-        viewModelScope.launch {
-            analytics.trackScreen("book_viewer")
-            analytics.track(AnalyticsEvent.BOOK_OPENED, mapOf(AnalyticsParam.BOOK_ID to bookId, AnalyticsParam.SOURCE to "viewer_load"))
+        if (loadedBookId == bookId && loadJob?.isActive == true) return
+        loadJob?.cancel()
+        loadedBookId = bookId
+        loadJob = viewModelScope.launch {
             val book = getBook(bookId)
             if (book != null) {
                 _state.update { it.copy(title = book.title, description = book.description, style = book.coverStyle) }
@@ -176,6 +180,22 @@ class BookViewerViewModel @Inject constructor(
                 _state.update { it.copy(pages = pages, isLoading = false) }
             }
         }
+    }
+
+    fun trackPage(bookId: String, index: Int) {
+        analytics.track(AnalyticsEvent.READER_PAGE_VIEWED, mapOf(AnalyticsParam.BOOK_ID to bookId, "page_number" to index + 1))
+    }
+
+    fun trackMode(fullPage: Boolean) {
+        analytics.track(AnalyticsEvent.READER_MODE_CHANGED, mapOf(AnalyticsParam.STYLE to if (fullPage) "full_page" else "standard"))
+    }
+
+    fun trackShare(success: Boolean) {
+        analytics.track(AnalyticsEvent.PAGE_SHARE_RESULT, mapOf(AnalyticsParam.RESULT to if (success) "chooser_opened" else "failure"))
+    }
+
+    fun trackPrintResult(success: Boolean) {
+        analytics.track(AnalyticsEvent.PRINT_RESULT, mapOf(AnalyticsParam.RESULT to if (success) "dialog_opened" else "failure"))
     }
 
     fun trackPrintStarted(bookId: String, pageCount: Int) {
@@ -229,13 +249,19 @@ fun BookViewerScreen(
                         currentImagePage?.let { page ->
                             scope.launch {
                                 runCatching { shareImagePage(context, page) }
-                                    .onFailure { Toast.makeText(context, "Share failed", Toast.LENGTH_SHORT).show() }
+                                    .onSuccess { viewModel.trackShare(true) }
+                                    .onFailure { viewModel.trackShare(false); Toast.makeText(context, "Share failed", Toast.LENGTH_SHORT).show() }
                             }
                         }
                     }) { Icon(Icons.Default.Share, contentDescription = "Share", tint = MaterialTheme.colorScheme.primary) }
                     IconButton(enabled = state.pages.isNotEmpty(), onClick = {
                         viewModel.trackPrintStarted(bookId, state.pages.size)
-                        printBook(context, state.title, state.pages)
+                        runCatching { printBook(context, state.title, state.pages) }
+                            .onSuccess { viewModel.trackPrintResult(true) }
+                            .onFailure {
+                                viewModel.trackPrintResult(false)
+                                Toast.makeText(context, "Print failed", Toast.LENGTH_SHORT).show()
+                            }
                     }) { Icon(Icons.Default.Print, contentDescription = "Print", tint = MaterialTheme.colorScheme.primary) }
                     IconButton(onClick = onEdit) { Icon(Icons.Default.Settings, contentDescription = "Config", tint = MaterialTheme.colorScheme.primary) }
                 },
@@ -260,7 +286,7 @@ fun BookViewerScreen(
                 else -> {
                     val pagerState = rememberPagerState(pageCount = { readerPages.size })
                     LaunchedEffect(pagerState) {
-                        snapshotFlow { pagerState.currentPage }.collectLatest { currentPageIndex = it }
+                        snapshotFlow { pagerState.settledPage }.collectLatest { currentPageIndex = it; viewModel.trackPage(bookId, it) }
                     }
                     
                     Column(Modifier.fillMaxSize()) {
@@ -274,7 +300,7 @@ fun BookViewerScreen(
                             PageSurface(
                                 readerPage = readerPages[index],
                                 isFullPage = isFullPage,
-                                onToggleFullPage = { isFullPage = !isFullPage },
+                                onToggleFullPage = { isFullPage = !isFullPage; viewModel.trackMode(isFullPage) },
                                 modifier = Modifier.graphicsLayer {
                                     val absOffset = kotlin.math.abs(pageOffset)
                                     rotationY = pageOffset * 30f
@@ -640,9 +666,16 @@ private class BookPrintDocumentAdapter(val context: Context, val title: String, 
 
 private suspend fun shareImagePage(context: Context, page: Page) {
     val shareFile = withContext(Dispatchers.IO) {
-        val directory = File(context.cacheDir, "shared").also { it.mkdirs() }
+        // Must match the cache path exposed by file_provider_paths.xml.
+        val directory = File(context.cacheDir, "shared_images").also { it.mkdirs() }
         val dest = File(directory, "share-${page.id}.jpg")
-        page.localUri?.let { File(it) }?.inputStream()?.use { it.copyTo(dest.outputStream()) }
+        val localUri = requireNotNull(page.localUri) { "Image is not downloaded yet" }
+        val uri = android.net.Uri.parse(localUri)
+        val input = if (uri.scheme == null) File(localUri).inputStream()
+            else context.contentResolver.openInputStream(uri)
+        requireNotNull(input) { "Unable to open image" }.use { source ->
+            dest.outputStream().use { output -> source.copyTo(output) }
+        }
         dest
     }
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shareFile)

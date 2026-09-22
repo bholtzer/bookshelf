@@ -8,22 +8,16 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
-val localProperties = Properties().apply {
-    val localFile = rootProject.file("local.properties")
-    if (localFile.exists()) {
-        localFile.inputStream().use { stream -> load(stream) }
-    }
-}
-
-fun googleWebClientId(): String =
-    providers.gradleProperty("GOOGLE_WEB_CLIENT_ID").orNull
-        ?: localProperties.getProperty("GOOGLE_WEB_CLIENT_ID")
-        ?: System.getenv("GOOGLE_WEB_CLIENT_ID")
-        ?: ""
-
 android {
     namespace = "com.bihstudio.madafim"
     compileSdk = 36
+
+    val keystorePropertiesFile = rootProject.file("keystore.properties")
+    val keystoreProperties = Properties().apply {
+        if (keystorePropertiesFile.exists()) {
+            keystorePropertiesFile.inputStream().use(::load)
+        }
+    }
 
     defaultConfig {
         applicationId = "com.bihstudio.madafim"
@@ -32,22 +26,16 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId()}\"")
     }
 
     signingConfigs {
         create("release") {
-            // Set these in ~/.gradle/gradle.properties or environment variables.
-            // Missing values allow debug builds; release signing requires all four.
-            fun signingValue(name: String): String? =
-                providers.gradleProperty(name).orNull
-                    ?: providers.environmentVariable(name).orNull
-
-            storeFile = signingValue("RELEASE_STORE_FILE")?.let { rootProject.file(it) }
-            storePassword = signingValue("RELEASE_STORE_PASSWORD")
-            keyAlias = signingValue("RELEASE_KEY_ALIAS")
-            keyPassword = signingValue("RELEASE_KEY_PASSWORD")
-
+            if (keystorePropertiesFile.exists()) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
         }
     }
 

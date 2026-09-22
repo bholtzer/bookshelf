@@ -2,7 +2,6 @@ package com.bihstudio.madafim.data.analytics
 
 import android.os.Bundle
 import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
-import com.bihstudio.madafim.domain.analytics.AnalyticsParam
 import com.google.firebase.analytics.FirebaseAnalytics
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,7 +20,7 @@ class FirebaseAnalyticsLogger @Inject constructor(
             FirebaseAnalytics.Event.SCREEN_VIEW,
             mapOf(
                 FirebaseAnalytics.Param.SCREEN_NAME to screenName,
-                AnalyticsParam.SCREEN_NAME to screenName,
+                FirebaseAnalytics.Param.SCREEN_CLASS to screenName,
             ),
         )
     }

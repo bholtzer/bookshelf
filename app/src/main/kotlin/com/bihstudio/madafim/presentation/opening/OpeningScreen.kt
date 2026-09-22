@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.bihstudio.madafim.R
+import com.bihstudio.madafim.ui.theme.madafimBackground
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Image as ImageIcon
@@ -78,7 +79,7 @@ fun OpeningScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(openingBackground()),
+            .background(madafimBackground()),
     ) {
         Column(
             modifier = Modifier
@@ -219,12 +220,3 @@ private fun OpeningBadge(
         }
     }
 }
-
-private fun openingBackground(): Brush =
-    Brush.verticalGradient(
-        listOf(
-            Color(0xFF062832),
-            Color(0xFF0D5865),
-            Color(0xFF7A4A28),
-        ),
-    )

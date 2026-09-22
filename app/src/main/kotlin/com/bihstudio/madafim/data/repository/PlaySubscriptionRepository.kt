@@ -12,6 +12,9 @@ import com.android.billingclient.api.ProductDetails
 import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
+import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
+import com.bihstudio.madafim.domain.analytics.AnalyticsEvent
+import com.bihstudio.madafim.domain.analytics.AnalyticsParam
 import com.bihstudio.madafim.domain.model.SubscriptionOffer
 import com.bihstudio.madafim.domain.model.SubscriptionPlan
 import com.bihstudio.madafim.domain.model.SubscriptionState
@@ -26,6 +29,7 @@ import javax.inject.Singleton
 @Singleton
 class PlaySubscriptionRepository @Inject constructor(
     @ApplicationContext context: Context,
+    private val analytics: AnalyticsLogger,
 ) : SubscriptionRepository {
     private val _state = MutableStateFlow(SubscriptionState())
     override val state: StateFlow<SubscriptionState> = _state.asStateFlow()
@@ -33,6 +37,18 @@ class PlaySubscriptionRepository @Inject constructor(
 
     private val billingClient = BillingClient.newBuilder(context)
         .setListener { result, purchases ->
+            val outcome = when {
+                result.responseCode == BillingClient.BillingResponseCode.USER_CANCELED -> "cancelled"
+                result.responseCode != BillingClient.BillingResponseCode.OK -> "failure"
+                purchases.orEmpty().any { it.purchaseState == Purchase.PurchaseState.PENDING } -> "pending"
+                purchases.orEmpty().any { it.purchaseState == Purchase.PurchaseState.PURCHASED } -> "purchased"
+                else -> "empty"
+            }
+            analytics.track(AnalyticsEvent.PURCHASE_RESULT, mapOf(
+                AnalyticsParam.RESULT to outcome,
+                "response_code" to result.responseCode,
+                AnalyticsParam.SOURCE to "purchase_update",
+            ))
             if (result.responseCode == BillingClient.BillingResponseCode.OK) {
                 purchases.orEmpty().forEach(::acknowledgeIfNeeded)
                 refreshPurchases()
@@ -53,6 +69,7 @@ class PlaySubscriptionRepository @Inject constructor(
 
     override fun launchPurchase(activity: Activity, offer: SubscriptionOffer) {
         val details = detailsByProduct[offer.plan.productId] ?: run {
+            analytics.track(AnalyticsEvent.PURCHASE_RESULT, mapOf(AnalyticsParam.RESULT to "unavailable", "product_id" to offer.plan.productId))
             _state.value = _state.value.copy(errorMessage = "This plan is not available yet.")
             refresh()
             return
@@ -61,18 +78,36 @@ class PlaySubscriptionRepository @Inject constructor(
             .setProductDetails(details)
             .setOfferToken(offer.offerToken)
             .build()
-        billingClient.launchBillingFlow(
+        val result = billingClient.launchBillingFlow(
             activity,
             BillingFlowParams.newBuilder()
                 .setProductDetailsParamsList(listOf(productParams))
                 .build(),
         )
+        if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+            analytics.track(AnalyticsEvent.PURCHASE_RESULT, mapOf(
+                AnalyticsParam.RESULT to if (result.responseCode == BillingClient.BillingResponseCode.USER_CANCELED) "cancelled" else "failure",
+                AnalyticsParam.SOURCE to "launch",
+                "product_id" to offer.plan.productId,
+                "response_code" to result.responseCode,
+            ))
+            _state.value = _state.value.copy(errorMessage = result.debugMessage)
+        }
+    }
+
+    private fun trackBilling(operation: String, result: BillingResult) {
+        analytics.track(AnalyticsEvent.BILLING_RESULT, mapOf(
+            AnalyticsParam.SOURCE to operation,
+            AnalyticsParam.RESULT to if (result.responseCode == BillingClient.BillingResponseCode.OK) "success" else "failure",
+            "response_code" to result.responseCode,
+        ))
     }
 
     private fun connect() {
         if (billingClient.isReady) return loadStoreState()
         billingClient.startConnection(object : BillingClientStateListener {
             override fun onBillingSetupFinished(result: BillingResult) {
+                trackBilling("connection", result)
                 if (result.responseCode == BillingClient.BillingResponseCode.OK) loadStoreState()
                 else _state.value = SubscriptionState(isLoading = false, errorMessage = result.debugMessage)
             }
@@ -98,6 +133,7 @@ class PlaySubscriptionRepository @Inject constructor(
         billingClient.queryProductDetailsAsync(
             QueryProductDetailsParams.newBuilder().setProductList(products).build(),
         ) { result, queryResult ->
+            trackBilling("offers", result)
             if (result.responseCode != BillingClient.BillingResponseCode.OK) {
                 _state.value = _state.value.copy(isLoading = false, errorMessage = result.debugMessage)
                 return@queryProductDetailsAsync
@@ -119,6 +155,7 @@ class PlaySubscriptionRepository @Inject constructor(
         billingClient.queryPurchasesAsync(
             QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.SUBS).build(),
         ) { result, purchases ->
+            trackBilling("restore_purchases", result)
             if (result.responseCode == BillingClient.BillingResponseCode.OK) {
                 purchases.forEach(::acknowledgeIfNeeded)
                 val isPro = purchases.any { purchase ->
@@ -134,6 +171,9 @@ class PlaySubscriptionRepository @Inject constructor(
         if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED || purchase.isAcknowledged) return
         billingClient.acknowledgePurchase(
             AcknowledgePurchaseParams.newBuilder().setPurchaseToken(purchase.purchaseToken).build(),
-        ) { refreshPurchases() }
+        ) { result ->
+            trackBilling("acknowledge", result)
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) refreshPurchases()
+        }
     }
 }

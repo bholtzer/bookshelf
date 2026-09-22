@@ -1,5 +1,7 @@
 package com.bihstudio.madafim.navigation
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.navigation.NavController
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -37,6 +39,24 @@ fun BookshelfNavGraph(
     pendingBookInvite: String?,
     onBookInviteConsumed: () -> Unit,
 ) {
+    DisposableEffect(navController, analytics) {
+        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
+            val screen = when (destination.route) {
+                Route.OPENING -> "opening"
+                Route.AUTH -> "auth"
+                Route.BOOKSHELF -> "bookshelf"
+                Route.VIEWER -> "book_viewer"
+                Route.DETAIL -> "book_detail"
+                Route.PRO -> "pro_paywall"
+                Route.ACCOUNT -> "account"
+                else -> null
+            }
+            if (screen != null) analytics.trackScreen(screen)
+            if (destination.route == Route.PRO) analytics.track(AnalyticsEvent.PAYWALL_VIEWED)
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
     NavHost(navController = navController, startDestination = startDestination) {
 
         composable(Route.OPENING) {

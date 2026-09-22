@@ -160,13 +160,18 @@ class BookDetailViewModel @Inject constructor(
     private val _state = MutableStateFlow(BookDetailUiState())
     val uiState: StateFlow<BookDetailUiState> = _state.asStateFlow()
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+    private var loadedBookId: String? = null
+
     fun load(bookId: String) {
-        viewModelScope.launch {
+        if (loadedBookId == bookId && loadJob?.isActive == true) return
+        loadJob?.cancel()
+        loadedBookId = bookId
+        loadJob = viewModelScope.launch {
             val userId = getCurrentUser()?.uid
             val book = getBook(bookId)
-            analytics.trackScreen("book_detail")
             analytics.track(
-                AnalyticsEvent.BOOK_EDIT_OPENED,
+                AnalyticsEvent.BOOK_DETAIL_LOADED,
                 mapOf(
                     AnalyticsParam.BOOK_ID to bookId,
                     AnalyticsParam.CAN_EDIT to (userId != null && book?.canEditPages(userId) == true),
@@ -199,6 +204,10 @@ class BookDetailViewModel @Inject constructor(
     }
 
     fun addFiles(files: List<PickedFile>) {
+        if (files.isEmpty()) {
+            analytics.track(AnalyticsEvent.PAGES_ADD_RESULT, mapOf(AnalyticsParam.RESULT to "cancelled"))
+            return
+        }
         val user = getCurrentUser() ?: return
         val bookId = _state.value.book?.id ?: return
         if (!_state.value.canEditPages) {

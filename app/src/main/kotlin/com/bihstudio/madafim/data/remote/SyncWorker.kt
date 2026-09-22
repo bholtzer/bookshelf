@@ -14,6 +14,9 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.bihstudio.madafim.domain.analytics.AnalyticsLogger
+import com.bihstudio.madafim.domain.analytics.AnalyticsEvent
+import com.bihstudio.madafim.domain.analytics.AnalyticsParam
 import com.bihstudio.madafim.domain.model.AppResult
 import com.bihstudio.madafim.domain.repository.BookRepository
 import com.bihstudio.madafim.domain.repository.PageRepository
@@ -30,6 +33,7 @@ class SyncWorker @AssistedInject constructor(
     private val getCurrentUser: GetCurrentUserUseCase,
     private val bookRepository: BookRepository,
     private val pageRepository: PageRepository,
+    private val analytics: AnalyticsLogger,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -40,6 +44,17 @@ class SyncWorker @AssistedInject constructor(
             bookRepository.syncFromRemote(user.uid),
         )
         val errors = results.filterIsInstance<AppResult.Error>()
+        val outcome = when {
+            errors.isEmpty() -> "success"
+            errors.any { it.cause.isPermanentStorageFailure() } -> "failure"
+            runAttemptCount < MAX_RETRIES -> "retry"
+            else -> "failure"
+        }
+        analytics.track(AnalyticsEvent.SYNC_RESULT, mapOf(
+            AnalyticsParam.RESULT to outcome,
+            "attempt" to runAttemptCount + 1,
+            "error_count" to errors.size,
+        ))
         if (errors.isEmpty()) return Result.success()
 
         val output = workDataOf(

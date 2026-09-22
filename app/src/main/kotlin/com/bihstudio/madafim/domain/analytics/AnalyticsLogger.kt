@@ -7,6 +7,26 @@ interface AnalyticsLogger {
 }
 
 object AnalyticsEvent {
+    const val SYNC_RESULT = "sync_result"
+    const val PRINT_RESULT = "print_result"
+    const val LIBRARY_RESTORE_RESULT = "library_restore_result"
+    const val INVITE_JOIN_STARTED = "invite_join_started"
+    const val INVITE_JOIN_RESULT = "invite_join_result"
+    const val INVITE_RECEIVED = "invite_received"
+    const val SHELF_SEARCHED = "shelf_searched"
+    const val SHELF_LAYOUT_CHANGED = "shelf_layout_changed"
+    const val ACCOUNT_SIGN_OUT_STARTED = "account_sign_out_started"
+    const val ACCOUNT_SIGN_OUT_RESULT = "account_sign_out_result"
+    const val ACCOUNT_DELETE_STARTED = "account_delete_started"
+    const val ACCOUNT_DELETE_RESULT = "account_delete_result"
+    const val EXTERNAL_LINK_OPENED = "external_link_opened"
+    const val PURCHASE_RESULT = "purchase_result"
+    const val BILLING_RESULT = "billing_result"
+    const val READER_PAGE_VIEWED = "reader_page_viewed"
+    const val READER_MODE_CHANGED = "reader_mode_changed"
+    const val PAGE_SHARE_RESULT = "page_share_result"
+    const val BOOK_DETAIL_LOADED = "book_detail_loaded"
+
     const val APP_OPENED = "app_opened"
     const val OPENING_FINISHED = "opening_finished"
     const val AUTH_EMAIL_STARTED = "auth_email_started"
